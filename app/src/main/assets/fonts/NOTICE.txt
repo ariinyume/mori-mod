@@ -1,0 +1,69 @@
+MoriMod 随包内置字体 —— 授权声明
+=================================
+
+本应用（io.github.ariinyume.morimod）随 APK 内置以下两款字体。二者的授权条款
+均抄自字体文件自身的 name 表（版权 / 许可字段），并非第三方站点转述：
+
+------------------------------------------------------------------
+1) source_han_sans_sc.otf
+   思源黑体 Source Han Sans SC Regular
+   family  : Source Han Sans SC
+   version : Version 2.004
+   copyright: © 2014-2021 Adobe (http://www.adobe.com/),
+              with Reserved Font Name 'Source'.
+   trademark: Source is a trademark of Adobe in the United States
+              and/or other countries.
+   license  : SIL Open Font License, Version 1.1
+   licenseURL: http://scripts.sil.org/OFL
+   保留名称（Reserved Font Name）：Source
+   上游项目 : https://github.com/adobe-fonts/source-han-sans
+
+   使用方式：**未做任何修改**，原样打包。因此保留名称 "Source" 仍然有效，
+   也不需要改名（OFL 1.1 第 3 条只约束「修改版」）。
+
+------------------------------------------------------------------
+2) smiley_sans.otf
+   得意黑 Smiley Sans Oblique
+   family  : Smiley Sans Oblique
+   version : Version 2.0.1
+   copyright: Copyright © 2022–2024 atelierAnchor. All rights reserved.
+   license  : SIL Open Font License, Version 1.1
+   licenseURL: https://scripts.sil.org/OFL
+   保留名称（Reserved Font Name）：得意 / Smiley
+   上游项目 : https://github.com/atelier-anchor/smiley-sans
+
+   使用方式：**未做任何修改**，原样打包；同样不需要改名。
+
+------------------------------------------------------------------
+为什么这两个可以随 APK 分发（而不是只「能用来排版」）
+------------------------------------------------------------------
+SIL OFL 1.1 的 PERMISSION & CONDITIONS 第 2 条原文：
+
+  "Original or Modified Versions of the Font Software may be bundled,
+   redistributed and/or sold with any software, provided that each copy
+   contains the above copyright notice and this license."
+
+即：**允许与任何软件捆绑、再分发乃至一并销售**，唯一义务是随包附带
+「上面的版权声明 + 本许可证」。本目录下的 OFL-1.1.txt 就是那份许可证全文，
+两份版权声明写在本文件里；设置页「关于」页也展示同样的信息，
+满足 OFL 对「easily viewed by the user」的要求。
+
+唯一仍然受限的是第 1 条：**不能把字体文件本身单独拿来卖**。
+本应用没有、也不会这么做。
+
+------------------------------------------------------------------
+没有内置的两款（重要）
+------------------------------------------------------------------
+用户可能还会用到「钉钉进步体」「阿里巴巴普惠体」，但它们**没有**内置，原因是
+授权条款明确不包含「再分发字体文件」这一项：
+
+· 钉钉进步体（钉钉(中国)信息技术有限公司）法律声明第 4 条原文禁止：
+  「1) 上传、发布、转载钉钉进步体文件」。
+  它确实「永久免费商用」，但商用 ≠ 可再分发，所以不进包。
+
+· 阿里巴巴普惠体 3.0（阿里巴巴(中国)有限公司）法律声明第 4 条原文禁止：
+  「将阿里巴巴字体进行单独定价出售、出租、出借、转让、转授权」。
+  它的授权范围是「下载、安装和使用」，同样不含再分发。
+
+这两款用户仍可通过设置页「选择字体文件」自行导入（文件来自用户本机，
+由用户自己承担该字体在其用途下的合规性）。本应用不分发它们的字体文件。

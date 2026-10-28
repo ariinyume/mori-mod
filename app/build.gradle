@@ -1,0 +1,161 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+// ============================================================================
+//  DLsiteSound MoriMod —— DLsiteSound 美化插件（LSPosed 运行时注入模块）
+//
+//  包名：io.github.ariinyume.morimod
+//  宿主：jp.co.eisys.dlsitesound（DLsiteSound 2.20.2 / code 593）
+//
+//  ── 版本号规则（与参考项目 DLsiteFloat 对齐）──
+//    versionName : 语义化版本（0.0.1 …）
+//    versionCode : 严格单调递增整数；本插件**从 10000 起**（用户指定）
+//    versionLabel: `构建当天 MMDD . 当日第几版`，跨日归 1
+//                  ⚠️ label 不进 APK（无 buildConfigField / resValue 消费）
+//
+//  ── LSPosed 现代 API（libxposed 102）──
+//    入口：src/main/resources/META-INF/xposed/java_init.list（逐行一个类名）
+//    作用域：META-INF/xposed/scope.list
+//    最低/目标 API：META-INF/xposed/module.prop
+//    ⚠️ 上面三个文件**禁写注释行（# 开头）且必须 LF** —— 裸解析器，混入注释会静默不加载。
+//
+//  ── 分层铁律（重要）──
+//    hook/ config/ data/ util/ view/ 全部是 **Java**，跑在**宿主进程**里，
+//    绝不允许引用 Compose / AndroidX 视图体系（会被一并注入宿主，风险极高）。
+//    ui/ 是 **Kotlin + Compose**，只跑在**模块自己的设置页进程**。
+//    两层唯一的耦合点是 config/ 里的纯数据类（MoriConfig 等，纯 Java 无 Android 依赖）。
+// ============================================================================
+
+def appVersionTag = '0.1.43'
+def appVersionCode = 10052
+def appVersionName = '0.1.43'
+def appVersionCodeLabel = '1028.1'
+
+// ── 本机私密配置（口令 / 密钥库路径），**不进仓库** ────────────────────────
+//   读取顺序：Gradle 属性（-Pxxx= / ~/.gradle/gradle.properties）→ local.properties
+//   模板见 gradle.local.properties.example，复制成 local.properties 后填值。
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+def secret = { String key, String fallback ->
+    (project.findProperty(key) ?: localProps.getProperty(key) ?: fallback) as String
+}
+
+android {
+    namespace 'io.github.ariinyume.morimod'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+
+    defaultConfig {
+        applicationId "io.github.ariinyume.morimod"
+        minSdk 24
+        targetSdk 36
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    signingConfigs {
+        release {
+            // ⚠️ 口令与 .jks 一律从 local.properties / Gradle 属性取，仓库里不留明文。
+            storeFile file(secret('MORIMOD_STORE_FILE', 'keystore-local/morimod-release.jks'))
+            storePassword secret('MORIMOD_STORE_PASSWORD', '')
+            keyAlias secret('MORIMOD_KEY_ALIAS', 'morimod')
+            keyPassword secret('MORIMOD_KEY_PASSWORD', '')
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+        compose true
+    }
+
+    packaging {
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}', 'META-INF/*.version', 'DebugProbesKt.bin']
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        freeCompilerArgs.add('-Xjvm-default=all')
+    }
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.outputs.each { output ->
+            output.outputFileName.set(
+                    "DLsiteMoriMod-${appVersionTag}-code${appVersionCode}-${variant.buildType}.apk")
+        }
+    }
+}
+
+dependencies {
+    // libxposed 现代 API（API 102）。compileOnly —— API 由框架运行时提供，不打进 APK。
+    compileOnly 'io.github.libxposed:api:102.0.0'
+
+    // ── 设置页：Jetpack Compose + Material 3 Expressive ──────────────
+    // ⚠️ 版本选型是**实测 javap 出来的**，不是照文档猜的：
+    //   · material3 1.4.0（最新稳定版）里 `MotionScheme.expressive()` 被编译成
+    //     `expressive$material3` —— Kotlin 的 internal名字修饰，说明它在 1.4.0
+    //     **不是公开 API**，外部引用直接编译报
+    //     "Cannot access 'fun expressive()': it is internal in 'MotionScheme.Companion'"。
+    //     同理 ExperimentalMaterial3ExpressiveApi / MaterialTheme(motionScheme=) 都是 internal。
+    //   · material3 1.5.0-alpha14 对齐 compose ui / foundation 1.8.2（实测 POM），
+    //     配compileSdk 36 + AGP 8.12.3 没问题。
+    //   · 1.5.0-beta01虽然 expressive() 也公开，但它对齐 compose 1.12.0，
+    //     而 compose 1.12.0 **硬性要求 compileSdk 37 + AGP 9.1.0+**，本项目不满足
+    //     （会直接 fail："requires Android Gradle plugin 9.1.0 or higher"）。
+    //     故取 alpha14 —— 它是「Expressive 公开API」与「compileSdk 36」的唯一交点。
+    //   · 1.5.0-alpha14 依赖 kotlin-stdlib 2.2.x，本项目 Kotlin 2.2.0 兼容。
+    //   ⚠️ Compose 坐标没有 BOM兜底，版本必须手动对齐；
+    //      foundation 的坐标是 `foundation`，**没有** `foundation:framework` 这个 artifact。
+    implementation 'androidx.core:core-ktx:1.16.0'
+    implementation 'androidx.activity:activity-compose:1.10.1'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.9.0'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0'
+    implementation 'androidx.navigation:navigation-compose:2.9.0'
+    implementation 'androidx.compose.ui:ui:1.8.2'
+    implementation 'androidx.compose.ui:ui-graphics:1.8.2'
+    implementation 'androidx.compose.ui:ui-tooling-preview:1.8.2'
+    implementation 'androidx.compose.foundation:foundation:1.8.1'
+    implementation 'androidx.compose.material3:material3:1.5.0-alpha14'
+    // Material Symbols Rounded（Icons.Rounded.*）
+    implementation 'androidx.compose.material:material-icons-extended:1.7.8'
+
+    // 设置页改用 Compose 后的编译期工具（不打包）
+    // ⚠️ 不要加 ui-tooling / ui-test-manifest —— 本项目不跑仪器测试，
+    //    加了只会让 release 包变大且无收益。
+}

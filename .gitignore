@@ -1,0 +1,34 @@
+# ── 构建产物 ──────────────────────────────────────────────────────
+.gradle/
+.kotlin/
+build/
+app/build/
+*.apk
+*.aab
+*.idsig
+*.hprof
+
+# ── 本地私密配置（签名口令 / 密钥库 / 工具链绝对路径）──────────────
+#   这些**绝不进仓库**：模板见 gradle.local.properties.example
+local.properties
+keystore-local/
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# ── 验证流水线的中间产物 ──────────────────────────────────────────
+dist/
+decm/
+dexm/
+shots/
+work/
+work_verify_*.log
+
+# ── 编辑器 / 系统 ────────────────────────────────────────────────
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini

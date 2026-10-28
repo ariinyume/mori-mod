@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 自适应图标背景（白天 = 艺术图的天空色） -->
+    <color name="mori_ic_bg">#FFA9D8F5</color>
+</resources>

@@ -1,0 +1,27 @@
+# ============================================================================
+#  复制成 local.properties 后填自己的值（local.properties 已在 .gitignore 里）
+#
+#    ⚠️ 这个 example 文件会进仓库，**只能写占位符**，不许写真实口令。
+# ============================================================================
+
+# ── Android SDK（Gradle 自己也会读这一项）──────────────────────────────────
+sdk.dir=/path/to/android-sdk
+
+# ── release 签名（缺这些就是 unsigned 包，assembleRelease 会失败）──────────
+#    也可以改成 -PMORIMOD_STORE_PASSWORD=… 或写进 ~/.gradle/gradle.properties
+MORIMOD_STORE_FILE=keystore-local/morimod-release.jks
+MORIMOD_STORE_PASSWORD=changeme
+MORIMOD_KEY_ALIAS=morimod
+MORIMOD_KEY_PASSWORD=changeme
+
+# ── 离线构建用的本地 maven 副本（可选）────────────────────────────────────
+#    libxposed api 的本地副本目录；留空就走 google() / mavenCentral()。
+MORIMOD_M2_LOCAL=
+
+# ── tools/run_verify.* 用的本地工具链（可选）──────────────────────────────
+#    不填就走环境变量 JAVA_HOME / ANDROID_HOME。
+#    若工具链是「jdk 与 sdk 放在同一个目录下」的便携包，只填 MORIMOD_TOOLCHAIN 即可：
+#      <MORIMOD_TOOLCHAIN>/<jdk 子目录>、<MORIMOD_TOOLCHAIN>/android-sdk
+MORIMOD_TOOLCHAIN=
+MORIMOD_JDK=
+MORIMOD_ANDROID_SDK=

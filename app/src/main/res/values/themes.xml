@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置页已改为 Compose，全部颜色 / 形状 / 动效由 MaterialTheme 提供。
+  这里只负责「窗口层」：无 ActionBar、状态栏与导航栏透明、深浅色跟随系统。
+
+  ⚠️ 父主题改用**框架内置** android:Theme.Material.*.NoActionBar ——
+     设置页不再依赖 com.google.android.material（View 体系），整个设置页已是 Compose；
+     保留 View 体系的 MD3 主题只会白白打进 APK。
+     深浅色由 values-night/ 自动切换（Compose 侧另有动态取色兜底）。
+-->
+<resources>
+    <style name="Theme.MoriMod" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+</resources>

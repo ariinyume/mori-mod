@@ -1,0 +1,32 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+// 本机私密配置（仓库里只留占位，见 gradle.local.properties.example）
+// ⚠️ 必须放在 pluginManagement 之后：settings.gradle 里 pluginManagement 必须是第一条语句。
+def localProps = new Properties()
+def localPropsFile = file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+// 离线构建用：libxposed api 102.0.0 的本地 maven 副本目录（可留空）
+def m2Local = localProps.getProperty('MORIMOD_M2_LOCAL', '').trim()
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        // 放在最前，避免 gradle 先去 mavenCentral 探网（离线环境会卡住）。
+        // ⚠️ 绝对路径属于本机配置 ⇒ 走 local.properties，不进仓库。
+        if (m2Local) {
+            maven { url 'file:///' + m2Local.replace('\\', '/') }
+        }
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "DLsiteSound_MoriMod"
+include ':app'

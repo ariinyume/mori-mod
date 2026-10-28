@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      libxposed 现代 API（102）：不再需要 xposedmodule / xposeddescription /
+      xposedminversion / xposedscope 等 meta-data。
+        · 模块名 ← android:label
+        · 简介   ← android:description
+        · 入口   ← META-INF/xposed/java_init.list
+        · 作用域 ← META-INF/xposed/scope.list
+        · 最低/目标 API ← META-INF/xposed/module.prop
+    -->
+
+    <!--
+      ⚠️ Android 11+（API 30）包可见性：不声明 <queries> 时 getPackageInfo(HOST_PKG)
+      一律抛 NameNotFoundException ⇒ 状态卡 / 关于页永远显示「未安装」，
+      即使 DLsiteSound 装得好好的（实测就是这个问题）。
+    -->
+    <queries>
+        <package android:name="jp.co.eisys.dlsitesound" />
+    </queries>
+
+    <!--
+      「桌面壁纸」来源（v0.1.12）：**必须由本应用自己读**。
+
+      WallpaperManager 的读取权限是在系统服务端（WallpaperManagerService）校验的，
+      宿主进程里四个入口全部 SecurityException（r16 真机日志
+      `drawable×; fast×; file1×; file2×`）—— 宿主 APK 我们改不了、加不了权限，
+      在宿主进程里再怎么钩也绕不过去。
+      所以改成设置页读一次、存成普通素材、走既有素材通道下发。
+
+      ⚠️ Android 13+ 的 READ_EXTERNAL_STORAGE 对 target 33+ 已失效，必须声明
+      READ_MEDIA_IMAGES；低版本继续用 READ_EXTERNAL_STORAGE（maxSdkVersion=32）。
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+    <application
+        android:label="@string/app_name"
+        android:description="@string/app_description"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:theme="@style/Theme.MoriMod">
+
+        <!--
+          独立设置页（FR-0.2）：跑在模块自己的进程里，宿主未启动时也可打开。
+
+          ⚠️ v0.0.7：configChanges **不再接管 density / screenSize / screenLayout /
+             smallestScreenSize / orientation**。
+             这三个（尤其 density + screenSize）自行接管后，Activity 不重建，
+             但 Compose 的 AndroidComposeView 仍按新 Configuration 重算布局 ——
+             真机上会出现「布局按新密度、命中测试按旧密度」的偏移，
+             表现就是**点哪都没反应、连水波纹都没有**（v0.0.6 的真机现象）。
+             尺寸/密度/旋转交给系统重建，Activity 重建后 destIndex 由
+             rememberSaveable 恢复，用户仍停在原页。
+             只保留字号/语言/布局方向这三个纯视觉项，避免调字号时页面闪一下重建。
+
+          ⚠️ LAUNCHER 意图**不在这里**，而在下面的 activity-alias 上 ——
+             这样「隐藏模块桌面图标」才能用 setComponentEnabledSetting 只关掉别名，
+             而不影响从 LSPosed 管理器直接拉起本 Activity（见 LauncherAlias 注释）。
+
+          ★ Xposed 生态惯例的「设置入口」（FR-0.9）：
+            LSPosed 管理器的「模块 → 启动/打开设置」按
+            `de.robv.android.xposed.category.MODULE_SETTINGS` 这个 **category** 查本模块的
+            Activity（AppHelper.getSettingsIntent），再用 setClassName 显式拉起 ——
+            **跟有没有桌面图标完全无关**。所以「隐藏桌面图标」之后仍然进得来。
+            （实测来源：LSPosed [模块] 页长按 →「启动」；同生态 autoScreenOff 等项目同一套做法。）
+            action 一并声明 MAIN 与同名 action，覆盖「按 action 查」与「按 category 查」两种实现。
+            launchMode=singleTask：从管理器拉起时复用已有实例，不会叠出第二个设置页。
+        -->
+        <activity
+            android:name="io.github.ariinyume.morimod.ui.SettingsActivity"
+            android:exported="true"
+            android:label="@string/settings_label"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MoriMod"
+            android:configChanges="fontScale|locale|layoutDirection">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <action android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          二级页宿主（v0.0.8）：背景自定义 / 字体替换 / 关于 各自是一个真实 Activity。
+          ⚠️ 不再在 SettingsActivity 内用 `when(dest)` 切页面 —— 实测「点了页面不动」
+             的唯一可疑环节就是那条「状态 → 重组 → 分支切换」链路，换成真 Activity
+             跳转后这条链路彻底不存在（onClick 里只有 startActivity）。
+          exported=false：只有本应用自己能拉起。
+          configChanges 与主页保持同一策略：只接管纯视觉项，尺寸/密度交给系统重建。
+        -->
+        <activity
+            android:name="io.github.ariinyume.morimod.ui.PageActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MoriMod"
+            android:configChanges="fontScale|locale|layoutDirection" />
+
+        <!--
+          配置应答器（v0.0.9）：**清单注册**，所以宿主一发广播，系统就会把本模块进程
+          拉起来应答 —— 不要求设置页开着，也不要求用户点任何东西。
+
+          为什么非它不可：宿主每次冷启动都读不到配置（真机日志 6/6 次
+          `config source=defaults`），功能因此仅在「设置页保存那一刻宿主还活着」时生效。
+          导出是必须的（宿主是另一个 uid）；它只会把我们自己的配置回发给宿主包，
+          不泄漏任何东西给第三方。
+        -->
+        <receiver
+            android:name="io.github.ariinyume.morimod.config.ConfigQueryReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.github.ariinyume.morimod.action.CONFIG_REQ" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          宿主心跳（v0.1.2）：宿主活着就每 20s 发一条，这里把时间戳落到本应用 prefs。
+
+          为什么必须清单注册：清单接收器能把已经死掉的模块进程拉起来，
+          用户从没打开过设置页时时间戳也一直新鲜；等打开设置页，状态卡第一帧就对，
+          不必先显示「检测中」再赌一次问答是否赶得上截止时间。
+        -->
+        <receiver
+            android:name="io.github.ariinyume.morimod.status.HostStatusReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.github.ariinyume.morimod.action.HOST_ALIVE" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          素材应答器（v0.1.1）：宿主收到「背景图/字体在这些私有路径下」之后，
+          发 ASSET_REQ 过来，本接收器把文件**分片广播**回去。
+
+          为什么不是 Provider / Service：
+            · Provider —— 真机报 Failed to find provider info，Android 11+ 包可见性
+              挡住了「按 authority 访问对方 provider」，而宿主 manifest 我们改不了；
+            · bindService 显式组件 —— 同样受包可见性约束（缺 <queries><package/>
+              时直接返回 false）。
+            · 显式广播 —— 本机唯一被日志证实打通的通道（CONFIG_REQ/CONFIG_CHANGED 双向都成功）。
+          这里是清单注册，所以模块进程被杀时也能被拉起应答。
+        -->
+        <receiver
+            android:name="io.github.ariinyume.morimod.assets.AssetQueryReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.github.ariinyume.morimod.action.ASSET_REQ" />
+            </intent-filter>
+        </receiver>
+
+
+        <!--
+          桌面图标别名：真正的 LAUNCHER 入口。
+          「隐藏模块桌面图标」开关 = 对这个组件调
+          PackageManager.setComponentEnabledSetting(..., COMPONENT_ENABLED_STATE_DISABLED)，
+          图标随即从桌面消失，且**重启后仍然隐藏**（写在 PackageManager 里，不依赖本进程）。
+          隐藏后仍可从 LSPosed 管理器 → 模块 → 启动（MODULE_SETTINGS 入口）进入设置页。
+        -->
+        <activity-alias
+            android:name="io.github.ariinyume.morimod.ui.LauncherAlias"
+            android:targetActivity="io.github.ariinyume.morimod.ui.SettingsActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MoriMod">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+    </application>
+</manifest>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MoriMod</string>
+    <string name="app_description">DLsiteSound 美化插件：媒体控件封面/名称、主页背景、全局字体</string>
+    <string name="settings_label">MoriMod 设置</string>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ⚠️ 铁律：foreground **绝不能**写 `@mipmap/ic_launcher`。
+  在 `mipmap-anydpi-v26/ic_launcher.xml` 里引用同名资源 = 自引用（anydpi 优先级高于任何密度），
+  Android 8+ 展开自适应图标时无限递归 ⇒ 桌面图标与 LSPosed 模块列表都拿不到图标，
+  只有直接引 `@drawable/mori_logo` 的地方（状态卡）看起来正常。
+  实测 v0.0.3 的 APK：`inset android:drawable=@0x7f080000`，而 0x7f080000 就是 mipmap/ic_launcher 自身。
+
+  修法：前景改用独立的满幅资源 `@mipmap/ic_launcher_foreground`
+  （由 mori-logo 的圆角艺术图扩边成 full-bleed，日/夜两套，各 5 个密度）。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/mori_ic_bg"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
