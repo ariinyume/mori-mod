@@ -1,5 +1,7 @@
 package io.github.ariinyume.morimod.hook;
 
+import android.graphics.Paint;
+
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -53,13 +55,117 @@ public final class AccentLut {
     private AccentLut() {
     }
 
-    /** 装三个挂点；任一失败只降级自身。 */
+    /** 装四个挂点；任一失败只降级自身。 */
     public static void install(ClassLoader cl) {
         int n = hookColorProp(cl);
         int g = hookGradient(cl);
         int p = hookPaint(cl);
         int t = hookTextColor(cl);
-        log("LUT installed: colorProp=" + n + " gradient=" + g + " paint=" + p + " text=" + t);
+        int d = hookTextDraw(cl);
+        log("LUT installed: colorProp=" + n + " gradient=" + g + " paint=" + p
+                + " text=" + t + " textDraw=" + d);
+    }
+
+    /**
+     * ★★★ v0.1.44（r15 一加 12 第 1 条）：<b>落笔时刻</b>的最后一道收口 ——
+     * {@code Canvas#drawText*} 上的 Paint 换色。
+     *
+     * <h3>为什么前面四个挂点在一加 12 上仍然漏</h3>
+     * r15 两台机器的日志对齐后只剩一个差别：同一颗宿主、同一个模块，
+     * <b>一加 15 的底栏标签走了 {@code Paint#setColor}</b>（日志里
+     * {@code paint map #ffa09bd4} 四条），<b>一加 12 一条都没有</b> ——
+     * 而 {@code TextView#setTextColor(int)} / {@code (ColorStateList)} 两个重载
+     * 在两台机器上都<b>从未</b>被底栏标签调用过（{@code tc} 探针里只有 12px 的空文本，
+     * 没有 35px 的标签）。也就是说标签颜色既不走「属性端」也不走「状态端」，
+     * 而是<b>烙在一份被复用的 TextPaint 里</b>（span 化的文案 + 缓存的文字布局）：
+     * 上色发生在我们挂上钩子之前、或发生在被 AOT 内联的调用点上 ⇒ 三道挂点全错过。
+     * 这也是「为什么会有机型显示差异」的答案：<b>不是规则差异，是这条色路在两台机器上
+     * 走的代码路径不同</b>（字体缩放 / 布局缓存时机不同），而旧的三个挂点只覆盖其中两条路。
+     *
+     * <h3>为什么这个挂点一定有效</h3>
+     * {@code StaticLayout} / {@code TextLine} 最后必须调
+     * {@code Canvas.drawText / drawTextRun} 把字符串画出来，传进来的就是那支
+     * TextPaint —— 在这里换色，等于改「这一次真正被画上去的颜色」，与前面挂点
+     * 是否被内联、是否被缓存无关。钩子体内只做 {@link AccentColor#remapPaint}
+     * 的三次数值比较预筛（不是紫族立刻放行），命中才 {@code setColor}，
+     * 未命中时与原实现等价。
+     *
+     * <p>⚠️ 幂等性：{@link AccentColor#remapPaint} 对「已经是强调色」的颜色
+     * 会被色相预筛挡住（强调色不在宿主紫族里）⇒ 不会出现「换过去又被换回来」的震荡。
+     */
+    private static int hookTextDraw(ClassLoader cl) {
+        // ★★★ v0.1.45（r16 一加 12 第 1 条）：光钩 Canvas 基类是**没用的**。
+        //   r16 两台机器都打出了 `hooked 7 Canvas#drawText*`，一加 12 的小字照样紫 ——
+        //   因为硬件加速路径里真正执行的是隐藏子类
+        //   {@code BaseRecordingCanvas}（→ RecordingCanvas → HardwareCanvas），
+        //   它<b>覆写了每一个 drawText* 并且不调 super</b>（AOSP 实现）。
+        //   Xposed 钩的是「方法实现」，虚分派到子类覆写 ⇒ 基类那 7 个钩子一次都进不来。
+        //   所以这里把基类 + 三个隐藏子类里<b>各自声明</b>的 drawText* 全部钩掉。
+        int n = 0;
+        for (String cn : new String[]{
+                "android.graphics.Canvas",
+                "android.graphics.BaseRecordingCanvas",
+                "android.graphics.RecordingCanvas",
+                "android.graphics.HardwareCanvas",
+                "android.graphics.PictureCanvas"}) {
+            try {
+                Class<?> cls = XposedCompat.findClass(cn, cl);
+                n += hookTextDrawIn(cls);
+            } catch (Throwable ignored) {
+                // 某些 ROM 上隐藏类不存在 ⇒ 跳过
+            }
+        }
+        log("hooked " + n + " Canvas#drawText*（落笔时刻换强调色，含 RecordingCanvas 系）");
+        return n;
+    }
+
+    private static volatile int sTextDrawHits;
+
+    /** 钩一个类里声明的全部 drawText* / drawTextRun*。 */
+    private static int hookTextDrawIn(Class<?> cls) {
+        Class<?> paintCls = android.graphics.Paint.class;
+        int n = 0;
+        try {
+            for (java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+                String mn = m.getName();
+                if (!mn.equals("drawText") && !mn.equals("drawTextRun")) continue;
+                Class<?>[] ps = m.getParameterTypes();
+                int pi = -1;
+                for (int i = 0; i < ps.length; i++) {
+                    if (paintCls.isAssignableFrom(ps[i])) {
+                        pi = i;
+                        break;
+                    }
+                }
+                if (pi < 0) continue;
+                final int idx = pi;
+                java.lang.reflect.Method mm = m;
+                mm.setAccessible(true);
+                XposedCompat.hookMethod(mm, chain -> {
+                    try {
+                        Object a = chain.getArg(idx);
+                        if (!(a instanceof Paint)) return chain.proceed();
+                        Paint p = (Paint) a;
+                        int c = p.getColor();
+                        int nx = AccentColor.remapPaint(c);
+                        if (nx == c) return chain.proceed();
+                        // 直接改这支画笔：这正是「这一次要画上去的颜色」。
+                        p.setColor(nx);
+                        if (sTextDrawHits < 4) {
+                            sTextDrawHits++;
+                            log("text draw map #" + String.format(java.util.Locale.ROOT, "%08x", c)
+                                    + " -> #" + String.format(java.util.Locale.ROOT, "%08x", nx));
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    return chain.proceed();
+                });
+                n++;
+            }
+        } catch (Throwable t) {
+            log("钩 " + cls.getName() + "#drawText* 失败: " + t);
+        }
+        return n;
     }
 
     /**

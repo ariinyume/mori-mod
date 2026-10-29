@@ -361,7 +361,19 @@ public final class XposedCompat {
         throw new NoSuchMethodException(cls.getName() + "#" + name);
     }
 
-    /** 列出某类（含父类链）上所有同名方法 —— 替代 {@code XposedBridge.hookAllMethods} 的枚举部分。 */
+    /** 列出某类（含父类链）上所有同名方法 —— 替代 {@code XposedBridge.hookAllMethods} 的枚举部分。
+     *
+     *  ★★★ v0.1.46：**跳过 abstract 方法**。
+     *  <p>真机日志（r46 一加15）：{@code 钩子未装 ExpoBlurView:
+     *  IllegalArgumentException: Cannot hook abstract methods:
+     *  protected abstract void android.view.ViewGroup.onLayout(...)}。
+     *  {@code findMethodsByName} 会沿父类链收集，{@code ExpoBlurView} 自己没有重写
+     *  {@code onLayout}，于是把 {@code ViewGroup} 的<b>抽象</b>实现也收了进来，
+     *  hook 一抛异常把整段 try 打断 —— 同一块里的 {@code draw/dispatchDraw/
+     *  onAttachedToWindow/configureBlurView/setBlurRadius} 一个都没挂上，
+     *  「隐藏宿主毛玻璃子层」这层保险整个失效（正是「高斯模糊概率性回来」的缺口之一）。
+     *  抽象方法本来就不可能被调用，跳过是纯收益。
+     */
     public static List<Method> findMethodsByName(Class<?> cls, String name) {
         List<Method> out = new ArrayList<>();
         if (cls == null) {
@@ -370,10 +382,15 @@ public final class XposedCompat {
         Class<?> c = cls;
         while (c != null) {
             for (Method m : c.getDeclaredMethods()) {
-                if (m.getName().equals(name)) {
-                    m.setAccessible(true);
-                    out.add(m);
+                if (!m.getName().equals(name)) {
+                    continue;
                 }
+                // abstract / 没有方法体的方法 hook 不上（libxposed 会直接抛）
+                if (java.lang.reflect.Modifier.isAbstract(m.getModifiers())) {
+                    continue;
+                }
+                m.setAccessible(true);
+                out.add(m);
             }
             c = c.getSuperclass();
         }

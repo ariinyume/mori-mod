@@ -142,6 +142,43 @@ public final class AccentColor {
     /** 转换表上限（token 就几十个，给到 4K 是纯保险）。 */
     private static final int LUT_MAX = 4096;
 
+    /**
+     * ★★★ v0.1.47（Float 模块避让指令·改动 4）：「此刻在画别人的东西，先别染」开关。
+     *
+     * <p>Float 模块（悬浮窗字幕）在 {@code SubtitleLineView#onDraw} 调 {@code super} 之前
+     * 反射把它置 {@code TRUE}、finally 里清掉 —— 这期间所有 remap 入口原样放行，
+     * 用户在 Float 那边选的字幕颜色（哪怕是有彩色）不会被染成强调色。
+     *
+     * <p>⚠️ 置位方<b>必须</b>在 finally 里清位，否则绘制线程会一直处于「不染」状态。
+     */
+    public static final ThreadLocal<Boolean> SUSPEND = new ThreadLocal<>();
+
+    /** 避让开关此刻是否生效（所有 remap 入口的第一行）。 */
+    private static boolean suspended() {
+        try {
+            return Boolean.TRUE.equals(SUSPEND.get());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * ★★★ v0.1.47（Float 模块避让指令·改动 3）：不透明的无彩色（纯白 / 灰 / 纯黑）
+     * 没有色相可换，直接放行 —— 典型受害者是悬浮窗字幕（默认 {@code #FFFFFFFF}）。
+     *
+     * <p>⚠️ 与旧逻辑的取舍：只放行 <b>alpha == 0xFF</b> 的无彩色。
+     * 「半透明中性色」<b>不能</b>放 —— 那是 v0.1.42（r13 用户第 1 条）特意做的
+     * 「中性半透明小字也要上强调色」，全放行会让一加 12 的底部导航标签退回灰色。
+     * 悬浮窗字幕默认是不透明白，这条判据对它已经足够。
+     */
+    private static boolean neutralOpaque(int argb) {
+        if ((argb >>> 24) != 0xFF) return false;
+        int r = (argb >> 16) & 0xff;
+        int g = (argb >> 8) & 0xff;
+        int b = argb & 0xff;
+        return Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b)) <= 6;
+    }
+
     /** 「map #xxx -> #xxx」诊断日志预算。 */
     private static int sMapLogs;
 
@@ -178,6 +215,9 @@ public final class AccentColor {
      * 才走这里的放宽逻辑。只放宽<b>彩度下限</b>，色相窗口 / 近白 / 近黑保护一律保留。
      */
     public static int remapSmallText(int argb) {
+        // ★ v0.1.47：Float 模块避让 + 不透明无彩色放行（见 neutralOpaque 的注释：
+        //   半透明中性色仍要上强调色，那是 v0.1.42 的正式行为，不能一起放掉）
+        if (suspended() || neutralOpaque(argb)) return argb;
         int normal = remap(argb);
         if (normal != argb || !sOn) return normal;
         int a = argb >>> 24;
@@ -338,6 +378,8 @@ public final class AccentColor {
      * @return 换色后的 ARGB；不需要换就是原值
      */
     public static int remap(int argb) {
+        // ★ v0.1.47：Float 模块避让（SUSPEND 置位期间原样放行）
+        if (suspended() || neutralOpaque(argb)) return argb;
         int a = argb >>> 24;
         if (a == 0) return argb;
         int rgb = argb & 0xFFFFFF;
@@ -389,6 +431,9 @@ public final class AccentColor {
      * 后面的 LCh 换算与查表根本走不到。
      */
     public static int remapPaint(int argb) {
+        // ★ v0.1.47：Float 模块避让（SUSPEND 置位期间原样放行）。
+        //   （无彩色本来就在下面的 b<=r 预筛里放行，这里不重复判。）
+        if (suspended()) return argb;
         int r = (argb >> 16) & 0xff;
         int g = (argb >> 8) & 0xff;
         int b = argb & 0xff;
@@ -443,7 +488,7 @@ public final class AccentColor {
 
     /** 渐变里的颜色：整条数组就地过一遍 LUT。 */
     public static void remapArray(int[] colors) {
-        if (colors == null || colors.length == 0 || !sOn) return;
+        if (colors == null || colors.length == 0 || !sOn || suspended()) return;
         try {
             for (int i = 0; i < colors.length; i++) {
                 int c = colors[i];
@@ -481,6 +526,42 @@ public final class AccentColor {
         double c = Math.max(6.0, Math.min(sSeedC * styleChromaMul() * 0.55, 42.0));
         double h = sanitize(sSeedH + styleHueShift());
         return fromLch(alpha, 18.0, c, h);
+    }
+
+    /**
+     * ★★★ v0.1.48（r48 用户第 1 条）：**防偷窥封面的「强调色罩」用的染色**。
+     *
+     * <h3>r47 为什么「生效了却看不出来」</h3>
+     * 真机日志（r48）里罩色明明打出来了：
+     * <pre>
+     *   wash privacy -> ExpoImageView 1153x357 r=0 px
+     * </pre>
+     * 但用户看到的还是原来的紫色。原因就在颜色本身：这里用的是 {@link #shadow}，
+     * 而 {@code shadow} 是<b>文字阴影</b>色 —— LCh 的 <b>L 固定 18（近黑）</b>、
+     * 彩度还要乘 0.55。19% 的这种颜色叠在浅紫封面上只会「压暗一格」，
+     * <b>色相根本没变</b> ⇒ 人眼判定「还是那个紫色」。
+     *
+     * <p>染色必须满足两条：<b>L 落在中段</b>（太亮像起雾、太暗像压黑，中段才是「上色」）、
+     * <b>彩度接近种子色的本色</b>（不乘 0.55）。另外 alpha 也要给足 ——
+     * 48/255 ≈ 19% 的叠色在浅底上肉眼几乎无感。
+     *
+     * @param alpha 0~255
+     */
+    public static int washTint(int alpha) {
+        if (alpha <= 0) return 0;
+        if (!sOn) return (alpha << 24);
+        // ★★★ v0.1.56（r56 用户第 1 条）：**不再从宿主紫推导，直接构造一个高彩度的强调色**。
+        //
+        //   前两版的教训：
+        //   · {@code remap(HOST_PURPLE)} 会保留宿主紫的<b>亮度 62</b>，再乘风格彩度系数 ——
+        //     壁纸种子偏紫时（日志 `seed hue=275`）算出来是<b>淡紫</b>，和「原来的紫」几乎一样；
+        //   · {@code fromLch(52, 种子彩度)} 也是同一类问题（彩度太低）。
+        //
+        //   现在固定：<b>亮度 55、彩度 70</b>（高彩度）、色相取强调色色相。
+        //   彩度 70 的颜色在任何亮度下都是「一眼能看出被染过」的鲜明色，
+        //   不可能再和宿主那层淡紫混为一谈。
+        double h = sanitize(sSeedH + styleHueShift());
+        return fromLch(alpha, 55.0, 70.0, h);
     }
 
     // ── 种子色 ──────────────────────────────────────────────────────

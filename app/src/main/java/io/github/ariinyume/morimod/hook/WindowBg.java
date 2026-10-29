@@ -83,6 +83,14 @@ public final class WindowBg {
                                 if (self instanceof Activity) {
                                     Activity a = (Activity) self;
                                     SEEN.put(a, Boolean.TRUE);
+                                    // ★★★ v0.1.46：回到前台先重置播放页/封面救援状态，
+                                    //   否则「迷你条状态下退后台→回前台→再展开播放页」
+                                    //   那一帧封面 alpha 仍卡在 0、底图也不重画
+                                    //   （用户第 4② 条「背景透明 + 封面不显示」）。
+                                    //   ★ v0.1.47：带上 Activity —— 除了清缓存还要把
+                                    //   整棵视图树 invalidate 一遍（RenderNode 里录着的
+                                    //   「透明帧」不清掉，状态翻转了也看不出来）。
+                                    BgPeel.onForeground(a);
                                     apply(a);
                                     // ★ v0.1.6：把宿主自己盖在上面的全屏层剥掉。
                                     //   用户的现象是「打开的一瞬间能看到壁纸，随后被挡住」——
@@ -152,7 +160,13 @@ public final class WindowBg {
      * @param a 当前前台的 Activity（可为 null，此时用最近登记过的）
      */
     public static void retryIfMissing(Activity a) {
-        if (applied()) return;
+        // ★★★ v0.1.46：不再只看「我们记过账」，还要看**这层背景现在还在不在**。
+        //   宿主在某些时机会把 DecorView 背景换回去（切后台 / 播放页收起再展开 /
+        //   播放页窗口重建），此时 {@code sAppliedKey} 还留着旧指纹，
+        //   旧版直接 return ⇒ 窗口层一直是宿主那块深藏青
+        //   （用户第 4① 条「播放页上方一条深色带」、第 4② 条「从迷你播放器展开后
+        //   背景像透明」都是这个洞透出来的底色）。
+        //   现在每个 onResume 都核实一次（只是读一个 drawable 引用，开销可忽略）。
         Activity target = a;
         if (target == null) {
             synchronized (SEEN) {
@@ -165,7 +179,21 @@ public final class WindowBg {
             }
         }
         if (target == null) return;
+        if (applied() && pinStillThere(target)) return;
         apply(target);
+    }
+
+    /** 记过账的那个 DecorView 现在挂的还是不是我们的背景。 */
+    private static boolean pinStillThere(Activity a) {
+        try {
+            Window w = a.getWindow();
+            View decor = w == null ? null : w.getDecorView();
+            if (decor == null) return true;      // 拿不到就不折腾，避免反复重铺
+            if (!decorIsMine(decor)) return false;
+            return decor.getBackground() instanceof io.github.ariinyume.morimod.view.CoverDrawable;
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     /** 配置变更 → 对当前所有 Activity 重新钉一遍。 */
@@ -195,7 +223,26 @@ public final class WindowBg {
         sAppliedKey = "";
     }
 
+    /** 「apply 进来了但没铺上」的诊断条数（限 4 条/进程，足够定位分支又不刷屏）。 */
+    private static volatile int sSkipLogs;
+
     private static void apply(Activity a) {
+        // ★★★ v0.1.46：**整个方法体自己兜住异常**。
+        //   以前 apply 的异常只能靠调用方（onResume 钩子 / reapplyAll）的
+        //   {@code catch (Throwable ignored)} 吞掉 —— 结果是 r46 那样：
+        //   日志里 `window bg applied` 从 19:08 之后一条都没有，
+        //   但又没有任何失败痕迹，完全无法定位卡在哪个分支。
+        //   而窗口层一旦没铺上，透出来的就是宿主自己的
+        //   {@code ColorDrawable#FF1C1B3D}（深藏青）——
+        //   正是用户截图里「播放页上方那条深色带」。
+        try {
+            applyInner(a);
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " window bg FAILED: " + t);
+        }
+    }
+
+    private static void applyInner(Activity a) {
         if (a == null) return;
         MoriConfig cfg = RemoteConfig.get();
         View decor = null;
@@ -235,7 +282,14 @@ public final class WindowBg {
             }
             return;
         }
-        if (decor == null) return;
+        if (decor == null) {
+            if (sSkipLogs < 4) {
+                sSkipLogs++;
+                XposedCompat.log(TAG + " window bg skip: decor=null (activity="
+                        + a.getClass().getName() + ")");
+            }
+            return;
+        }
 
         String key = (cfg.f2DesktopWall ? "@desk" : cfg.f2HomeBg)
                 + "|" + cfg.f2MaskAlpha + "|b" + cfg.f2Blur;
