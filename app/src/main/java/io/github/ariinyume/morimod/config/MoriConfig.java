@@ -50,6 +50,13 @@ public final class MoriConfig {
     /** 社团名（artist）替换开关。 */
     public boolean f1Artist = false;
 
+    // ── 作品封面屏蔽（v0.1.88 / r112 用户第 2 条）──────────────
+    /**
+     * 作品封面屏蔽：开启后宿主全页面的作品封面都不画（留空），
+     * 但那块区域仍然可点（我们只跳绘制，不碰触摸事件）。
+     */
+    public boolean coverBlock = false;
+
     // ── F2 主背景自定义（仅主页）─────────────────────────────────────
     public boolean f2Enabled = false;
     /** 主页背景图（本地引用路径，空 = 未设置）。 */
@@ -129,16 +136,7 @@ public final class MoriConfig {
      */
     public boolean f2Transparent = false;
 
-    /**
-     * 「使用桌面壁纸」作为宿主背景（v0.1.10，替代已废弃的 {@link #f2Transparent}）。
-     *
-     * <p>语义：读取系统当前的桌面壁纸位图，当作壁纸铺进宿主 —— 视觉上就是
-     * 「宿主背景换成了用户自己的桌面」。比真的把窗口设透明靠谱得多：
-     * 宿主的 window 不是 translucent，运行时改不了，透明只会露出白色/黑色。
-     *
-     * <p>与 {@link #f2HomeBg} **互斥**：选了图片就清它，选了桌面壁纸就清图片。
-     */
-    public boolean f2DesktopWall = false;
+    // ★ r112：`f2DesktopWall`（桌面壁纸）已按用户要求整条移除。
 
     /**
      * 背景模糊强度 0–100（v0.1.6）。
@@ -242,9 +240,9 @@ public final class MoriConfig {
         MoriConfig c = new MoriConfig();
         c.savedAt = savedAt;
         c.f1Enabled = f1Enabled; c.f1Cover = f1Cover; c.f1Title = f1Title; c.f1Artist = f1Artist;
+        c.coverBlock = coverBlock;
         c.f2Enabled = f2Enabled; c.f2HomeBg = f2HomeBg; c.f2MaskAlpha = f2MaskAlpha;
         c.f2Transparent = f2Transparent;
-        c.f2DesktopWall = f2DesktopWall;
         c.f2Blur = f2Blur;
         c.f2PlayBlur = f2PlayBlur;
         c.f2Accent = f2Accent;
@@ -296,7 +294,6 @@ public final class MoriConfig {
         //      迁移只在 fromJson 读到 v1 配置时做一次，避免隐式副作用。
         //   ② 图片与桌面壁纸只能有一个生效，桌面壁纸优先。
         f2Transparent = false;
-        if (f2DesktopWall) f2HomeBg = "";
         if (f4FontFamily == null) f4FontFamily = "";
         if (f4FontFile == null) f4FontFile = "";
         // 「我的字体」清单：去 null / 去空 / 去重，保持用户添加顺序。
@@ -329,14 +326,14 @@ public final class MoriConfig {
             o.put("savedAt", savedAt);
             o.put("f1Enabled", f1Enabled);
             o.put("f1Cover", f1Cover);
+        o.put("coverBlock", coverBlock);
             o.put("f1Title", f1Title);
             o.put("f1Artist", f1Artist);
             o.put("f2Enabled", f2Enabled);
             o.put("f2HomeBg", f2HomeBg);
             o.put("f2MaskAlpha", f2MaskAlpha);
             o.put("f2Transparent", f2Transparent);
-            o.put("f2DesktopWall", f2DesktopWall);
-            o.put("f2Blur", f2Blur);
+                o.put("f2Blur", f2Blur);
             o.put("f2PlayBlur", f2PlayBlur);
             o.put("f2Accent", f2Accent);
             o.put("f2AccentStyle", f2AccentStyle);
@@ -388,14 +385,14 @@ public final class MoriConfig {
             c.savedAt = o.optLong("savedAt", 0L);
             c.f1Enabled = o.optBoolean("f1Enabled", false);
             c.f1Cover = o.optBoolean("f1Cover", true);
+        c.coverBlock = o.optBoolean("coverBlock", false);
             c.f1Title = o.optBoolean("f1Title", false);
             c.f1Artist = o.optBoolean("f1Artist", false);
             c.f2Enabled = o.optBoolean("f2Enabled", false);
             c.f2HomeBg = o.optString("f2HomeBg", "");
             c.f2MaskAlpha = o.optInt("f2MaskAlpha", 0);
             c.f2Transparent = o.optBoolean("f2Transparent", false);
-            c.f2DesktopWall = o.optBoolean("f2DesktopWall", false);
-            c.f2Blur = o.optInt("f2Blur", 0);
+                c.f2Blur = o.optInt("f2Blur", 0);
             c.f2PlayBlur = o.optInt("f2PlayBlur", 0);
             c.f2Accent = o.optBoolean("f2Accent", false);
             c.f2AccentStyle = o.optString("f2AccentStyle", "TonalSpot");
@@ -456,8 +453,7 @@ public final class MoriConfig {
             //      · 已选图 → 丢弃这条脏数据，图才是用户真正选的
             if (schema < 2 && c.f2Transparent) {
                 c.f2Transparent = false;
-                if (c.f2HomeBg.isEmpty()) c.f2DesktopWall = true;
-            }
+                }
             c.clamp();
             return c;
         } catch (Throwable t) {
@@ -469,7 +465,7 @@ public final class MoriConfig {
     public String summary() {
         return "F1=" + f1Enabled + "(c" + f1Cover + "/t" + f1Title + "/a" + f1Artist + ")"
                 + " F2=" + f2Enabled + "(bg=" + (f2HomeBg.isEmpty() ? "none" : "set")
-                + ",desk=" + f2DesktopWall + ",mask=" + f2MaskAlpha + ",clear=" + f2Transparent
+                 + ",mask=" + f2MaskAlpha + ",clear=" + f2Transparent
                 + ",blur=" + f2Blur + ",playBlur=" + f2PlayBlur
                 + ",accent=" + f2Accent + "/" + f2AccentStyle
                 + ",pageA=" + f2PageAlpha + ")"

@@ -9,7 +9,6 @@ import java.lang.reflect.Method;
 import io.github.ariinyume.morimod.config.MoriConfig;
 import io.github.ariinyume.morimod.config.RemoteConfig;
 import io.github.ariinyume.morimod.util.DiagLog;
-import io.github.ariinyume.morimod.util.WallpaperBg;
 import io.github.ariinyume.morimod.util.XposedCompat;
 import io.github.ariinyume.morimod.view.CoverDrawable;
 
@@ -351,7 +350,7 @@ public final class FeatureF2 {
      */
     public static Drawable cachedDrawable(MoriConfig cfg) {
         if (cfg == null || !cfg.f2Enabled) return null;
-        String key = (cfg.f2DesktopWall ? "@desk" : cfg.f2HomeBg)
+        String key = cfg.f2HomeBg
                 + "|m" + cfg.f2MaskAlpha + "|b" + cfg.f2Blur;
         CoverDrawable cur = sDrawable;
         if (cur != null && cur.valid() && key.equals(sDrawableKey)) return cur;
@@ -396,7 +395,7 @@ public final class FeatureF2 {
      */
     public static Bitmap barBitmap(MoriConfig cfg) {
         if (cfg == null || !cfg.f2Enabled) return null;
-        String key = (cfg.f2DesktopWall ? "@desk" : cfg.f2HomeBg)
+        String key = cfg.f2HomeBg
                 + "|bar" + BAR_BLUR_PCT + "|" + cfg.f2Blur;
         Bitmap cur = sBarBmp;
         if (cur != null && !cur.isRecycled() && key.equals(sBarKey)) return cur;
@@ -439,7 +438,7 @@ public final class FeatureF2 {
     public static Bitmap playBgBitmap(MoriConfig cfg) {
         if (cfg == null || !cfg.f2Enabled) return null;
         int pct = Math.max(0, Math.min(100, cfg.f2PlayBlur));
-        String key = (cfg.f2DesktopWall ? "@desk" : cfg.f2HomeBg)
+        String key = cfg.f2HomeBg
                 + "|play" + pct + "|" + cfg.f2Blur;
         Bitmap cur = sPlayBmp;
         if (cur != null && !cur.isRecycled() && key.equals(sPlayKey)) return cur;
@@ -469,7 +468,6 @@ public final class FeatureF2 {
      */
     public static boolean hasWallpaper(MoriConfig cfg) {
         if (cfg == null || !cfg.f2Enabled) return false;
-        if (cfg.f2DesktopWall) return true;
         return cfg.f2HomeBg != null && !cfg.f2HomeBg.isEmpty();
     }
 
@@ -502,9 +500,8 @@ public final class FeatureF2 {
      * 模糊只在这里做（一次性），{@link CoverDrawable} 每帧只是画一张位图。
      */
     private static Bitmap cachedBitmap(MoriConfig cfg) {
-        boolean desk = cfg.f2DesktopWall;
         int blur = Math.max(0, Math.min(100, cfg.f2Blur));
-        String key = desk ? "@desktop" : cfg.f2HomeBg;
+        String key = cfg.f2HomeBg;
         String ck = key + "|b" + blur;
         if (ck.equals(sCachedBmpKey) && sCachedBmp != null && !sCachedBmp.isRecycled()) {
             return sCachedBmp;
@@ -512,28 +509,23 @@ public final class FeatureF2 {
         // ⚠️ 宿主进程没有 READ_MEDIA_IMAGES，WallpaperManager 的 drawable / fast /
         //    file×2 四个入口**全部抛 SecurityException**（r16 真机日志，每 2 秒刷一屏）。
         //    桌面壁纸现在由设置页进程读好 → 存成普通素材 → 走 f2HomeBg，这里不再尝试。
-        Bitmap b = desk ? null : ModuleAssets.decodeBitmap(key);
+        Bitmap b = ModuleAssets.decodeBitmap(key);
         if (b == null) {
             // 不缓存失败：素材可能还在等跨 uid 服务连上，下一次渲染再试。
             // 但降级日志只报一次 —— 这里是超热路径，每次都写会把日志刷爆。
             if (!sDegradeLogged) {
                 sDegradeLogged = true;
-                DiagLog.degrade("F2", desk
-                        ? "读不到桌面壁纸，本轮回落宿主原背景"
-                        : "背景素材暂不可用，本轮回落宿主原图（BR-2.5）");
+                DiagLog.degrade("F2", "背景素材暂不可用，本轮回落宿主原图（BR-2.5）");
             }
             return null;
         }
         if (blur > 0) {
             Bitmap blurred = io.github.ariinyume.morimod.util.BlurUtil.apply(b, blur);
             if (blurred != b) {
-                // ⚠️ 桌面壁纸是系统缓存里的对象，不能 recycle（下一次还会拿到它）；
-                //    用户图是我们自己 decode 出来的，及时还内存。
-                if (!desk) {
-                    try {
-                        b.recycle();
-                    } catch (Throwable ignored) {
-                    }
+                // 用户图是我们自己 decode 出来的，及时还内存。
+                try {
+                    b.recycle();
+                } catch (Throwable ignored) {
                 }
                 b = blurred;
             }
@@ -554,6 +546,5 @@ public final class FeatureF2 {
         sPlayKey = "";
         sBmpOk = false;
         sDegradeLogged = false;
-        WallpaperBg.invalidate();
     }
 }

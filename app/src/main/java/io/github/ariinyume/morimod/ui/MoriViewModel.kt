@@ -295,6 +295,13 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * ⚠️ 刻意**不弹任何提示**（用户明确要求）：这个开关只影响日志详略，
      *    开关本身的状态变化已经是全部反馈，弹 Snackbar 反而挡视线。
      */
+    /** ★ r112：作品封面屏蔽开关。 */
+    fun setCoverBlock(v: Boolean) {
+        config.coverBlock = v
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
     fun setDebugLog(v: Boolean) {
         config.debugLog = v
         persist()
@@ -436,71 +443,12 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         config.f2HomeBg = path
         // 历史字段「全透明」一律清掉：它的实现是清空宿主背景，真机表现为整屏发白
         config.f2Transparent = false
-        // 图片与桌面壁纸互斥（v0.1.10）
-        config.f2DesktopWall = false
         // 选了图就默认启用：否则用户选完「什么都没发生」，很像功能坏了（v0.0.5 真机体感）
         if (path.isNotEmpty()) config.f2Enabled = true
         config.clamp()
         if (persist()) toast = S.TOAST_SAVED
     }
 
-    /**
-     * 「使用桌面壁纸」（v0.1.12：改成**在本进程读、存成素材**）。
-     *
-     * <h3>为什么不在宿主进程读了</h3>
-     * r16 真机日志：宿主里四个入口全抛 {@code SecurityException}
-     * （{@code drawable×; fast×; file1×; file2×}）。
-     * {@code WallpaperManager} 的读取权限是在**系统服务端**校验的，模块在宿主进程里
-     * 无论怎么钩都绕不过去 —— 而宿主 APK 我们改不了、加不了权限。
-     *
-     * <p>所以改成：设置页（本应用，可以声明并申请「图片」权限）读一次壁纸位图，
-     * 落成一个普通素材文件，再走**既有的素材通道**下发到宿主。
-     * 对宿主来说这就是一张普通背景图，跟用户自己选的一张没有区别。
-     *
-     * @return true = 已读到并设成背景
-     */
-    fun useDesktopWallpaper(): Boolean {
-        val ctx = getApplication<Application>()
-        // 上一次失败会留 2 秒冷却；用户刚点完按钮，必须重试而不是等冷却
-        io.github.ariinyume.morimod.util.WallpaperBg.invalidate()
-        val bmp = io.github.ariinyume.morimod.util.WallpaperBg.get(ctx)
-        if (bmp == null) {
-            toast = S.TOAST_WALLPAPER_FAILED
-            return false
-        }
-        val saved = FileStore.saveBitmap(ctx, downscaleWallpaper(bmp), "bg")
-        if (saved == null) {
-            toast = S.TOAST_SAVE_FAILED
-            return false
-        }
-        addMedia(saved, "background", S.BTN_DESKTOP_WALL)
-        setF2Background(saved)      // 内部会把 f2DesktopWall 清掉并 toast「已保存」
-        toast = S.TOAST_DESKTOP_WALL
-        return true
-    }
-
-    /** 用户拒绝了「图片」权限（读不了桌面壁纸）。 */
-    fun reportWallpaperDenied() {
-        toast = S.TOAST_WALLPAPER_DENIED
-    }
-
-    /**
-     * 桌面壁纸常常是 2K/4K（2400×5200 这种），原样落盘是好几 MB ——
-     * 素材通道按 200KB 分片广播，太大就会传很久。屏幕上根本看不出差别，
-     * 这里按最长边 2048 缩一次（和裁切页的输出上限保持一致）。
-     */
-    private fun downscaleWallpaper(src: android.graphics.Bitmap): android.graphics.Bitmap {
-        val longer = maxOf(src.width, src.height)
-        if (longer <= 2048 || longer <= 0) return src
-        val s = 2048f / longer
-        val w = (src.width * s).toInt().coerceAtLeast(1)
-        val h = (src.height * s).toInt().coerceAtLeast(1)
-        return try {
-            android.graphics.Bitmap.createScaledBitmap(src, w, h, true)
-        } catch (t: Throwable) {
-            src
-        }
-    }
 
     /**
      * 裁切结果落成背景（v0.1.11）。
@@ -556,7 +504,6 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         //   否则 persist() 的「关键字段回补」会把刚清掉的背景又填回来（用户点「恢复默认」没反应）。
         bgClearedByUser = true
         config.f2HomeBg = ""
-        config.f2DesktopWall = false
         config.f2Transparent = false
         config.f2MaskAlpha = 0
         config.f2Blur = 0

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -140,10 +141,10 @@ internal fun HomeScreen(
         item { SectionHeader(S.SEC_FEATURES) }
         item {
             ConnectedItems(
-                count = 4,
+                count = 5,
                 modifier = Modifier.padding(horizontal = Space.ScreenH),
             ) { i ->
-                val shape = connectedItemShape(i, 4)
+                val shape = connectedItemShape(i, 5)
                 when (i) {
                     0 -> MoriListItem(
                         icon = Icons.Rounded.Image,
@@ -167,12 +168,26 @@ internal fun HomeScreen(
                         onClick = { vm.notify(S.TOAST_RESERVED) },
                         trailing = { WipTag() },
                     )
-                    else -> MoriListItem(
+                    3 -> MoriListItem(
                         icon = Icons.AutoMirrored.Rounded.ReceiptLong,
                         title = S.ITEM_LAYOUT,
                         shape = shape,
                         onClick = { vm.notify(S.TOAST_RESERVED) },
                         trailing = { WipTag() },
+                    )
+                    // ★ r112 用户第 2 条：作品封面屏蔽
+                    else -> MoriListItem(
+                        icon = Icons.Rounded.VisibilityOff,
+                        title = S.ITEM_COVER_BLOCK,
+                        summary = S.ITEM_COVER_BLOCK_SUM,
+                        shape = shape,
+                        onClick = { vm.setCoverBlock(!vm.config.coverBlock) },
+                        trailing = {
+                            MoriSwitch(
+                                checked = vm.config.coverBlock,
+                                onCheckedChange = { vm.setCoverBlock(it) },
+                            )
+                        },
                     )
                 }
             }

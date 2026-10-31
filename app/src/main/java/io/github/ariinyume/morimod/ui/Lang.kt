@@ -56,6 +56,8 @@ internal abstract class MoriStrings {
     abstract val ITEM_GLASS: String
     abstract val ITEM_FONT: String
     abstract val ITEM_LAYOUT: String
+    abstract val ITEM_COVER_BLOCK: String
+    abstract val ITEM_COVER_BLOCK_SUM: String
     abstract val ITEM_HIDE_ICON: String
     abstract val ITEM_DEBUG_LOG: String
     abstract val ITEM_DEBUG_LOG_SUM: String
@@ -95,7 +97,6 @@ internal abstract class MoriStrings {
     abstract val F2_MY_BGS_EMPTY: String
 
     /** 「桌面壁纸」来源（v0.1.10 取代旧的「全透明背景」）。 */
-    abstract val F2_DESKTOP_NOTE: String
 
     /** 裁切页（v0.1.11）：选完图先按屏幕比例取景，再落成背景。 */
     abstract val CROP_TITLE: String
@@ -174,7 +175,6 @@ internal abstract class MoriStrings {
     abstract val BTN_EXPORT: String
     abstract val BTN_PICK_IMAGE: String
     /** 「桌面壁纸」（v0.1.10 取代旧的「全透明背景」按钮）。 */
-    abstract val BTN_DESKTOP_WALL: String
     abstract val BTN_PICK_FONT: String
     abstract val BTN_USE_SYSTEM_FONT: String
     abstract val BTN_COPY_INFO: String
@@ -220,9 +220,6 @@ internal abstract class MoriStrings {
     abstract val TAG_WIP: String
     abstract val TOAST_GLASS_SAVED: String
     abstract val TOAST_DEFAULT_RESTORED: String
-    abstract val TOAST_DESKTOP_WALL: String
-    abstract val TOAST_WALLPAPER_FAILED: String
-    abstract val TOAST_WALLPAPER_DENIED: String
     /** 删掉了正在使用的背景图 ⇒ 已自动恢复宿主默认。 */
     abstract val TOAST_BG_RESTORED: String
     abstract val TOAST_NO_SELECTION: String
@@ -261,6 +258,8 @@ internal object ZhCn : MoriStrings() {
     override val ITEM_GLASS = "主程序液态玻璃主题"
     override val ITEM_FONT = "主程序字体替换"
     override val ITEM_LAYOUT = "主页模块布局调整"
+    override val ITEM_COVER_BLOCK = "作品封面屏蔽"
+    override val ITEM_COVER_BLOCK_SUM = "全页面不显示作品封面，位置仍可点击"
     override val ITEM_HIDE_ICON = "隐藏模块桌面图标"
     override val ITEM_DEBUG_LOG = "调试日志"
     override val ITEM_DEBUG_LOG_SUM = "默认关闭，打开后写入 LSPosed 日志"
@@ -292,7 +291,6 @@ internal object ZhCn : MoriStrings() {
     override val F2_MY_BGS = "我的背景"
     override val F2_MY_BGS_NOTE = "支持 jpg/png/webp：点一项即可换用，长按删除"
     override val F2_MY_BGS_EMPTY = "还没有导入过背景图。"
-    override val F2_DESKTOP_NOTE = "把宿主背景换成你系统当前的桌面壁纸"
     override val CROP_TITLE = "裁剪背景"
     override val CROP_HINT = "双指缩放、拖动调整位置；框内这块会按屏幕比例铺满宿主背景"
     override val BTN_CROP_SKIP = "跳过裁剪"
@@ -359,7 +357,6 @@ internal object ZhCn : MoriStrings() {
     override val BTN_CLEAR = "清空列表"
     override val BTN_EXPORT = "导出列表"
     override val BTN_PICK_IMAGE = "选择图片"
-    override val BTN_DESKTOP_WALL = "桌面壁纸"
     override val BTN_PICK_FONT = "导入本地字体文件"
     override val BTN_USE_SYSTEM_FONT = "使用系统内置字体"
     override val BTN_COPY_INFO = "复制版本信息"
@@ -401,9 +398,6 @@ internal object ZhCn : MoriStrings() {
     override val TAG_WIP = "待开发"
     override val TOAST_GLASS_SAVED = "液态玻璃为第二批功能，偏好已记录"
     override val TOAST_DEFAULT_RESTORED = "已恢复宿主默认"
-    override val TOAST_DESKTOP_WALL = "已用当前桌面壁纸作背景"
-    override val TOAST_WALLPAPER_FAILED = "读不到桌面壁纸：请先在系统里设置一张壁纸"
-    override val TOAST_WALLPAPER_DENIED = "需要「图片」权限才能读取桌面壁纸"
     override val TOAST_BG_RESTORED = "已恢复为宿主默认背景"
     override val TOAST_NO_SELECTION = "请先选择一个文件"
     override val TOAST_ICON_HIDDEN = "桌面图标已隐藏"
@@ -440,6 +434,8 @@ internal object ZhTw : MoriStrings() {
     override val ITEM_GLASS = "主程式液態玻璃主題"
     override val ITEM_FONT = "主程式字型替換"
     override val ITEM_LAYOUT = "首頁模組版面調整"
+    override val ITEM_COVER_BLOCK = "作品封面屏蔽"
+    override val ITEM_COVER_BLOCK_SUM = "全頁面不顯示作品封面，位置仍可點擊"
     override val ITEM_HIDE_ICON = "隱藏模組桌面圖示"
     override val ITEM_DEBUG_LOG = "除錯日誌"
     override val ITEM_DEBUG_LOG_SUM = "預設關閉，開啟後寫入 LSPosed 日誌"
@@ -471,7 +467,6 @@ internal object ZhTw : MoriStrings() {
     override val F2_MY_BGS = "我的背景"
     override val F2_MY_BGS_NOTE = "支援 jpg/png/webp：點一項即可換用，長按刪除"
     override val F2_MY_BGS_EMPTY = "尚未匯入背景圖。"
-    override val F2_DESKTOP_NOTE = "把宿主背景換成你系統目前的桌面桌布"
     override val CROP_TITLE = "裁剪背景"
     override val CROP_HINT = "雙指縮放、拖動調整位置；框內這塊會按螢幕比例鋪滿宿主背景"
     override val BTN_CROP_SKIP = "略過裁剪"
@@ -538,7 +533,6 @@ internal object ZhTw : MoriStrings() {
     override val BTN_CLEAR = "清空清單"
     override val BTN_EXPORT = "匯出清單"
     override val BTN_PICK_IMAGE = "選擇圖片"
-    override val BTN_DESKTOP_WALL = "桌面桌布"
     override val BTN_PICK_FONT = "匯入本機字型檔"
     override val BTN_USE_SYSTEM_FONT = "使用系統內建字型"
     override val BTN_COPY_INFO = "複製版本資訊"
@@ -580,9 +574,6 @@ internal object ZhTw : MoriStrings() {
     override val TAG_WIP = "待開發"
     override val TOAST_GLASS_SAVED = "液態玻璃為第二批功能，偏好已記錄"
     override val TOAST_DEFAULT_RESTORED = "已還原宿主預設"
-    override val TOAST_DESKTOP_WALL = "已用目前桌面桌布作背景"
-    override val TOAST_WALLPAPER_FAILED = "讀不到桌面桌布：請先在系統裡設定一張桌布"
-    override val TOAST_WALLPAPER_DENIED = "需要「圖片」權限才能讀取桌面桌布"
     override val TOAST_BG_RESTORED = "已還原為宿主預設背景"
     override val TOAST_NO_SELECTION = "請先選擇一個檔案"
     override val TOAST_ICON_HIDDEN = "桌面圖示已隱藏"
@@ -619,6 +610,8 @@ internal object En : MoriStrings() {
     override val ITEM_GLASS = "Liquid glass theme"
     override val ITEM_FONT = "App font"
     override val ITEM_LAYOUT = "Home layout"
+    override val ITEM_COVER_BLOCK = "Blur work covers"
+    override val ITEM_COVER_BLOCK_SUM = "Hide cover art everywhere; the area stays tappable"
     override val ITEM_HIDE_ICON = "Hide launcher icon"
     override val ITEM_DEBUG_LOG = "Debug log"
     override val ITEM_DEBUG_LOG_SUM = "Off by default; writes to the LSPosed log"
@@ -650,7 +643,6 @@ internal object En : MoriStrings() {
     override val F2_MY_BGS = "My backgrounds"
     override val F2_MY_BGS_NOTE = "jpg / png / webp: tap to apply, long-press to delete"
     override val F2_MY_BGS_EMPTY = "No background imported yet."
-    override val F2_DESKTOP_NOTE = "Use your current system wallpaper as the app background"
     override val CROP_TITLE = "Crop background"
     override val CROP_HINT = "Pinch to zoom, drag to move. The framed area fills the app background at screen ratio."
     override val BTN_CROP_SKIP = "Skip cropping"
@@ -717,7 +709,6 @@ internal object En : MoriStrings() {
     override val BTN_CLEAR = "Clear list"
     override val BTN_EXPORT = "Export list"
     override val BTN_PICK_IMAGE = "Choose image"
-    override val BTN_DESKTOP_WALL = "Wallpaper"
     override val BTN_PICK_FONT = "Choose font file"
     override val BTN_USE_SYSTEM_FONT = "Use system font"
     override val BTN_COPY_INFO = "Copy version info"
@@ -759,9 +750,6 @@ internal object En : MoriStrings() {
     override val TAG_WIP = "Coming soon"
     override val TOAST_GLASS_SAVED = "Liquid glass arrives in the second batch; preference saved"
     override val TOAST_DEFAULT_RESTORED = "Restored host default"
-    override val TOAST_DESKTOP_WALL = "Using your current wallpaper"
-    override val TOAST_WALLPAPER_FAILED = "Can't read the wallpaper — set one in system settings first"
-    override val TOAST_WALLPAPER_DENIED = "Photos permission is needed to read your wallpaper"
     override val TOAST_BG_RESTORED = "Restored host default background"
     override val TOAST_NO_SELECTION = "Pick a file first"
     override val TOAST_ICON_HIDDEN = "Launcher icon hidden"

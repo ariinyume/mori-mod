@@ -39,6 +39,8 @@ internal object S {
     val ITEM_GLASS get() = s.ITEM_GLASS
     val ITEM_FONT get() = s.ITEM_FONT
     val ITEM_LAYOUT get() = s.ITEM_LAYOUT
+    val ITEM_COVER_BLOCK get() = s.ITEM_COVER_BLOCK
+    val ITEM_COVER_BLOCK_SUM get() = s.ITEM_COVER_BLOCK_SUM
     val ITEM_HIDE_ICON get() = s.ITEM_HIDE_ICON
     val ITEM_DEBUG_LOG get() = s.ITEM_DEBUG_LOG
     val ITEM_DEBUG_LOG_SUM get() = s.ITEM_DEBUG_LOG_SUM
@@ -73,7 +75,6 @@ internal object S {
     val F2_MY_BGS get() = s.F2_MY_BGS
     val F2_MY_BGS_NOTE get() = s.F2_MY_BGS_NOTE
     val F2_MY_BGS_EMPTY get() = s.F2_MY_BGS_EMPTY
-    val F2_DESKTOP_NOTE get() = s.F2_DESKTOP_NOTE
     val CROP_TITLE get() = s.CROP_TITLE
     val CROP_HINT get() = s.CROP_HINT
     val BTN_CROP_SKIP get() = s.BTN_CROP_SKIP
@@ -133,7 +134,6 @@ internal object S {
     val BTN_CLEAR get() = s.BTN_CLEAR
     val BTN_EXPORT get() = s.BTN_EXPORT
     val BTN_PICK_IMAGE get() = s.BTN_PICK_IMAGE
-    val BTN_DESKTOP_WALL get() = s.BTN_DESKTOP_WALL
     val BTN_PICK_FONT get() = s.BTN_PICK_FONT
     val BTN_USE_SYSTEM_FONT get() = s.BTN_USE_SYSTEM_FONT
     val BTN_COPY_INFO get() = s.BTN_COPY_INFO
@@ -177,9 +177,6 @@ internal object S {
     val TAG_WIP get() = s.TAG_WIP
     val TOAST_GLASS_SAVED get() = s.TOAST_GLASS_SAVED
     val TOAST_DEFAULT_RESTORED get() = s.TOAST_DEFAULT_RESTORED
-    val TOAST_DESKTOP_WALL get() = s.TOAST_DESKTOP_WALL
-    val TOAST_WALLPAPER_FAILED get() = s.TOAST_WALLPAPER_FAILED
-    val TOAST_WALLPAPER_DENIED get() = s.TOAST_WALLPAPER_DENIED
     val TOAST_BG_RESTORED get() = s.TOAST_BG_RESTORED
     val TOAST_NO_SELECTION get() = s.TOAST_NO_SELECTION
     val TOAST_ICON_HIDDEN get() = s.TOAST_ICON_HIDDEN

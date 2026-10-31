@@ -102,18 +102,7 @@ internal fun BackgroundScreen(
 
     var pendingDelete by remember { mutableStateOf<MoriConfig.MediaItem?>(null) }
 
-    // 「桌面壁纸」要在**本进程**读（宿主进程里 WallpaperManager 四个入口全 SecurityException），
-    // 所以必须自己申请「图片」权限。
-    val wallPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        Manifest.permission.READ_MEDIA_IMAGES
-    } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-    }
-    val permLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) vm.useDesktopWallpaper() else vm.reportWallpaperDenied()
-    }
+    // ★ r112：「桌面壁纸」入口与其权限流程已按用户要求整条移除。
     // 选完图先进裁切页（v0.1.11），确认后才入库 + 设为背景
     var pendingCrop by remember { mutableStateOf<CropTarget?>(null) }
 
@@ -189,7 +178,7 @@ internal fun BackgroundScreen(
                     Spacer(Modifier.height(rowGap))
                     ConnectedButtonGroup(
                         labels = listOf(
-                            S.BTN_PICK_IMAGE, S.BTN_DESKTOP_WALL, S.BTN_RESTORE,
+                            S.BTN_PICK_IMAGE, S.BTN_RESTORE,
                         ),
                         onSelect = { i ->
                             when (i) {
@@ -198,15 +187,6 @@ internal fun BackgroundScreen(
                                         ActivityResultContracts.PickVisualMedia.ImageOnly
                                     )
                                 )
-                                1 -> {
-                                    val ok = ContextCompat.checkSelfPermission(ctx, wallPerm) ==
-                                            PackageManager.PERMISSION_GRANTED
-                                    if (ok) {
-                                        vm.useDesktopWallpaper()
-                                    } else {
-                                        permLauncher.launch(wallPerm)
-                                    }
-                                }
                                 else -> vm.restoreBackgroundDefault()
                             }
                         },
@@ -241,8 +221,7 @@ internal fun BackgroundScreen(
 
             // ── 卡外说明①：桌面壁纸是什么（v0.1.10 的新语义）──────────
             item {
-                BgNote(S.F2_DESKTOP_NOTE, top = cardGap)
-            }
+                }
 
             // ── ② 我的背景（图库：点选应用 / 长按删除）────────────────
             item {
@@ -419,8 +398,7 @@ internal fun BackgroundScreen(
 /** 待裁切的一张图：刚导入的落盘路径 + 展示名（入库时当 label）。 */
 private data class CropTarget(val path: String, val label: String)
 
-/** 「当前背景」那一行：桌面壁纸 / 未设置 / 某个文件名，三种状态必须分得开。 */private fun currentLabel(cfg: MoriConfig): String = when {
-    cfg.f2DesktopWall -> "${S.F2_CURRENT}：${S.BTN_DESKTOP_WALL}"
+/** 「当前背景」那一行：未设置 / 某个文件名。 */private fun currentLabel(cfg: MoriConfig): String = when {
     cfg.f2HomeBg.isEmpty() -> S.F2_CURRENT_NONE
     else -> "${S.F2_CURRENT}：${cfg.f2HomeBg.substringAfterLast('/')}"
 }

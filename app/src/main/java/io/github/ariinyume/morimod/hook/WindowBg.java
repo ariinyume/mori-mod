@@ -291,7 +291,7 @@ public final class WindowBg {
             return;
         }
 
-        String key = (cfg.f2DesktopWall ? "@desk" : cfg.f2HomeBg)
+        String key = cfg.f2HomeBg
                 + "|" + cfg.f2MaskAlpha + "|b" + cfg.f2Blur;
         // 同一个 Activity 重复 onResume（切页返回）时不必再设一遍；
         // 但如果这个 DecorView 换过了（Activity 重建），必须重新铺。
@@ -307,7 +307,7 @@ public final class WindowBg {
             decor.setBackground(d);
             sAppliedKey = scoped;
             XposedCompat.log(TAG + " window bg applied: " + a.getClass().getName()
-                    + " (" + (cfg.f2DesktopWall ? "desktop" : "image") + ")");
+                    + " (image)");
             diagOnce(decor);
         } catch (Throwable t) {
             XposedCompat.log(TAG + " setBackground failed: " + t);

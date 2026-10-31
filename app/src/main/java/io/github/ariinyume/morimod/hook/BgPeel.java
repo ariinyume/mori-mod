@@ -216,7 +216,15 @@ public final class BgPeel {
     private static final float FULL_W_RATIO = 0.94f;
 
     /** 前台复核周期（只读配置 + 缓存，不遍历视图树）。 */
-    private static final long POLL_MS = 800L;
+    /**
+     * 前台配置轮询间隔（v0.1.87：800ms → 1500ms）。
+     *
+     * <p>这条轮询的唯一目的是「用户改了 Mori 设置后能跟上」，而 {@code RemoteConfig}
+     * 本身有缓存、位图也按 key 复用，所以它并不重；但 800ms 一拍在主线程上仍是
+     * 每秒 1.25 次的无谓唤醒（还会带着 {@code AccentColor.update} / 屏幕尺寸刷新）。
+     * 1.5 秒足够——改设置时几乎感觉不到延迟。
+     */
+    private static final long POLL_MS = 1500L;
 
     /** 日志上限（每进程）。★ v0.1.28：160 → 320（确认音让日志更完整）。 */
     private static final int LOG_BUDGET = 320;
@@ -466,6 +474,9 @@ public final class BgPeel {
 
     /** 本次审计已输出行数（v0.1.67，限 70 行，防止刷爆日志）。 */
     private static volatile int sAuditLines;
+
+    /** 关着日志时的遍历节点计数（每次 dump 归零，v0.1.87）。 */
+    private static volatile int sAuditNodes;
 
     /** 最近一次铺「播放档满屏底」的时间（v0.1.63，窗口根兜底底板的信号源）。 */
     private static volatile long sPlayPaintedAt;
@@ -1113,6 +1124,772 @@ public final class BgPeel {
         //   以前挂 TextView#setTextColor 只能改字，宿主满屏的紫色底 / 开关 / 遮罩全漏。
         AccentLut.install(cl);
         refreshMaskPaint();
+        // v0.1.70（r73）：播放页静止画面也能被 adb 读到层级（见 startProbeLoop）
+        // v0.1.88（r101）：诊断循环停用（r88~r100 的取证到此为止，稳态零额外开销）
+        // startProbeLoop();
+        // ★★★ v0.1.80（r104 用户第 1 条）：作品文件夹树里的「系统返回键」= 上一层文件夹
+        hookBackKey(cl);
+        // ★★★ v0.1.85（r109 路径 2）：页面内容「挂载完成」这一事件上重绘一次
+        hookScreenContentAdded(cl);
+        hookScreenSwitch(cl);
+        // ★★★ v0.1.77（r91）：空页看门狗（只观测，不改任何绘制）
+        // startBlankWatch();
+    }
+
+    /**
+     * ★★★ v0.1.74（r88 第 2 条「左/右划返回后页面空白」）：<b>页面切换事件 → 整窗补绘。</b>
+     *
+     * <h3>为什么是「补绘」而不是「少画」</h3>
+     * 空白页的特征（用户录屏逐帧确认）：页面区域只剩壁纸，但<b>底部 tab 栏、迷你条都正常</b>，
+     * 右边还能看到一条滚动条 ⇒ 页面容器在、内容层没画出来。
+     * 这正是 r82 §1 定过的那条：<b>硬件加速下每层有自己的 RenderNode，
+     * 我们（或宿主）在那一层「内容还是空的时候」录进了一份显示列表，
+     * 之后内容回来了但没人让它重录 ⇒ 屏幕上永远停在空白</b>。
+     * r82 给出的解法是「缺的是一次重绘」，而切后台再回来立刻恢复也印证了这点。
+     *
+     * <h3>为什么挂在 {@code Screen#setActivityState}</h3>
+     * <ul>
+     *   <li>它是 react-native-screens 每次「页面进出栈」<b>必定</b>调用的一个方法
+     *       （手势返回、导航返回、tab 切换都走它），频率是「每次切换 1~2 次」，
+     *       不是每帧 ⇒ 不存在 r47 那种「每次绑定都重绘整棵树」的卡顿；</li>
+     *   <li>比猜手势可靠得多：左右划返回在 {@code View} 层面只表现为 translationX，
+     *       而 translation 不改变 scale，转场探测（看 scale）根本发现不了。</li>
+     * </ul>
+     * 命中后交给心跳在接下来两拍里各做一次 {@link #invalidateTree}（逐层 invalidate
+     * 才会让子层重录；只 invalidate 根的话，子层的 RenderNode 会被原样复用）。
+     */
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ v0.1.80（r104 用户第 1 条）：系统返回键在「作品文件夹树」里要回上一层
+    // ══════════════════════════════════════════════════════════════════
+
+    /** 是否已经吞掉了这次返回键的 ACTION_DOWN（UP 也要一起吞，不能让宿主再处理一次）。 */
+    private static volatile boolean sBackEat;
+
+    /** 返回键路径诊断日志条数（v0.1.80 定位期用）。 */
+    private static volatile int sBackKeyLogs;
+
+    /** 「连按 3 次音量-」诊断热键的计数（v0.1.81）。 */
+    private static volatile int sVolDownHits;
+    private static volatile long sVolDownAt;
+
+    /**
+     * 诊断：把当前窗口的树打一行（类名 / 尺寸 / 屏幕坐标 / 背景 / 位图种类 / 模糊半径）。
+     *
+     * <p>为什么需要它：这个宿主有常驻动画（迷你条 + 回顾 CD 旋转），
+     * {@code uiautomator dump} 永远报 {@code could not get idle state}，
+     * 只能从进程内部自己抓。
+     */
+    private static void dumpWindowTree(Activity a) {
+        dumpDecorTree(a == null || a.getWindow() == null ? null : a.getWindow().getDecorView());
+    }
+
+    private static void dumpDecorTree(final View decor0) {
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    View decor = decor0;
+                    if (decor == null) return;
+                    sDumpNodes = 0;
+                    sDumpShown = 0;
+                    sDumpErr = null;
+                    StringBuilder sb = new StringBuilder("tree dump decor="
+                            + decor.getWidth() + "x" + decor.getHeight()
+                            + " shown=" + decor.isShown() + " winVis=" + decor.getWindowVisibility()
+                            + " vis=" + decor.getVisibility());
+                    walkDump(decor, 0, sb);
+                    sb.append("\n#nodes=").append(sDumpNodes).append(" shown=").append(sDumpShown)
+                            .append(" err=").append(sDumpErr);
+                    // logcat 单条上限约 4KB —— 分段打，否则树一长就被截断（r105 踩过）
+                    String all = sb.toString();
+                    int step = 2600;
+                    int part = 0;
+                    for (int i = 0; i < all.length(); i += step, part++) {
+                        android.util.Log.i("MoriSnap", "§" + part + " "
+                                + all.substring(i, Math.min(all.length(), i + step)));
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
+    private static int sDumpNodes;
+    private static int sDumpShown;
+    private static String sDumpErr;
+
+    private static void walkDump(View v, int depth, StringBuilder sb) {
+        if (v == null || depth > 45 || sb.length() > 400000) return;
+        sDumpNodes++;
+        try {
+            int[] loc = LOC.get();
+            v.getLocationOnScreen(loc);
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w > 0 && h > 0) {
+                if (v.isShown()) sDumpShown++;
+                StringBuilder bg = new StringBuilder("-");
+                try {
+                    Drawable d = v.getBackground();
+                    if (d != null) {
+                        Integer c = solidColorOf(d);
+                        bg.setLength(0);
+                        bg.append(c == null ? name0(d) : "#" + Integer.toHexString(c));
+                    }
+                } catch (Throwable ignored) {
+                }
+                sb.append('\n').append(depth).append(' ').append(name(v))
+                        .append(' ').append(w).append('x').append(h)
+                        .append(" @").append(loc[0]).append(',').append(loc[1])
+                        .append(" a=").append(String.format(java.util.Locale.US, "%.2f", v.getAlpha()))
+                        .append(" r=").append(blurRadiusOf(v))
+                        .append(" k=").append(imgKind(v))
+                        .append(" bg=").append(bg);
+                // 文字层把内容也打出来（定位「月度回顾」页靠它）
+                if (v instanceof android.widget.TextView) {
+                    try {
+                        CharSequence cs = ((android.widget.TextView) v).getText();
+                        String s = cs == null ? "" : cs.toString();
+                        if (s.length() > 18) s = s.substring(0, 18);
+                        sb.append(" t='").append(s).append('\'');
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                int n = g.getChildCount();
+                for (int i = 0; i < n; i++) walkDump(g.getChildAt(i), depth + 1, sb);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 把「系统返回键」翻译成「点一下作品页左上那颗返回按钮」。
+     *
+     * <h3>为什么必须这么绕</h3>
+     * 作品页里的文件夹树（面包屑 作品 > 文件夹 > 子文件夹 …）<b>不是路由</b>：
+     * 真机实测，在第四层按系统返回键，整页被 pop 回媒体库，
+     * 而点左上那颗 `<` 才是「上一层文件夹」（uiautomator 实证它的 id 是
+     * {@code work-back-button}，宿主自己实现了逐层上跳）。
+     * 也就是说：<b>这颗按钮才是这一页的“返回上一层”</b>，系统返回键只是没人翻译。
+     *
+     * <h3>为什么不去改导航状态</h3>
+     * r103 已经证明「改写 react-native-screens 的页面状态」会把底栏切换整个搞坏
+     * （见 {@link #hookScreenSwitch}）。这里只做「把这次按键换成一次点击」，
+     * 页面状态仍然全部由宿主自己维护。
+     *
+     * <h3>边界</h3>
+     * <ul>
+     *   <li>只有这颗按钮<b>存在且可见</b>时才接管（作品页以外一律原样放过）；</li>
+     *   <li>树里只要有可见的<b>压暗遮罩</b>（弹层 / 模态）就让宿主自己处理 ——
+     *       否则「返回键关弹层」会变成「返回键退页」；</li>
+     *   <li>找不到按钮、id 变了、点击抛异常 ⇒ 一律回退到宿主行为（等于没装）。</li>
+     * </ul>
+     */
+    private static void hookBackKey(ClassLoader cl) {
+        try {
+            int n = 0;
+            for (Method m : XposedCompat.findMethodsByName(android.app.Activity.class, "dispatchKeyEvent")) {
+                XposedCompat.hookMethod(m, chain -> {
+                    try {
+                        Object self = chain.getThisObject();
+                        Object a0 = chain.getArg(0);
+                        if (sArmed && self instanceof Activity && a0 instanceof android.view.KeyEvent) {
+                            android.view.KeyEvent ev = (android.view.KeyEvent) a0;
+                            // ★ v0.1.81：诊断热键 —— 连按 3 次「音量-」dump 一次当前窗口层级
+                            //   （uiautomator 抓不到：这宿主有常驻动画，永远 idle 不了）
+                            if (ev.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+                                if (ev.getAction() == android.view.KeyEvent.ACTION_DOWN) {
+                                    long now = System.currentTimeMillis();
+                                    if (now - sVolDownAt < 1200L) sVolDownHits++;
+                                    else sVolDownHits = 1;
+                                    sVolDownAt = now;
+                                    if (sVolDownHits >= 3) {
+                                        sVolDownHits = 0;
+                                        dumpWindowTree((Activity) self);
+                                    }
+                                }
+                            }
+                            if (ev.getKeyCode() == android.view.KeyEvent.KEYCODE_BACK) {
+                                int act = ev.getAction();
+                                if (act == android.view.KeyEvent.ACTION_DOWN) {
+                                    boolean armed = armBackTap((Activity) self);
+                                    if (sBackKeyLogs < 6) {
+                                        sBackKeyLogs++;
+                                        log("back DOWN armed=" + armed);
+                                    }
+                                    if (armed) {
+                                        sBackEat = true;
+                                        return false;          // 吞掉 DOWN
+                                    }
+                                } else if (act == android.view.KeyEvent.ACTION_UP && sBackEat) {
+                                    sBackEat = false;
+                                    return false;          // 吞掉 UP
+                                }
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    return chain.proceed();
+                });
+                n++;
+            }
+            log("hooked " + n + " Activity#dispatchKeyEvent（作品页返回上一层）");
+            // ★ v0.1.81：**弹窗窗口（Dialog）也挂一份诊断热键**。
+            //   实测「月度回顾」那一页不是页面栈里的一屏，而是一个 Dialog 窗口：
+            //   按键不会走到 Activity#dispatchKeyEvent ⇒ 上一版热键在那里一声不响。
+            int dn = 0;
+            try {
+                for (Method m : XposedCompat.findMethodsByName(android.app.Dialog.class, "dispatchKeyEvent")) {
+                    XposedCompat.hookMethod(m, chain -> {
+                        try {
+                            Object self = chain.getThisObject();
+                            Object a0 = chain.getArg(0);
+                            if (self instanceof android.app.Dialog && a0 instanceof android.view.KeyEvent) {
+                                android.view.KeyEvent ev = (android.view.KeyEvent) a0;
+                                if (ev.getKeyCode() == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+                                        && ev.getAction() == android.view.KeyEvent.ACTION_DOWN) {
+                                    long now = System.currentTimeMillis();
+                                    if (now - sVolDownAt < 1200L) sVolDownHits++;
+                                    else sVolDownHits = 1;
+                                    sVolDownAt = now;
+                                    if (sVolDownHits >= 3) {
+                                        sVolDownHits = 0;
+                                        dumpDecorTree(((android.app.Dialog) self).getWindow().getDecorView());
+                                    }
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                        return chain.proceed();
+                    });
+                    dn++;
+                }
+            } catch (Throwable ignored) {
+            }
+            log("hooked " + dn + " Dialog#dispatchKeyEvent（诊断热键）");
+            // 诊断：宿主的返回到底走不走 onBackPressed（走 ⇒ 返回键不在 dispatchKeyEvent 生效）
+            int bn = 0;
+            for (Method m : XposedCompat.findMethodsByName(android.app.Activity.class, "onBackPressed")) {
+                XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                    @Override
+                    protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                        if (sBackKeyLogs < 6) {
+                            sBackKeyLogs++;
+                            log("onBackPressed reached");
+                        }
+                    }
+                });
+                bn++;
+            }
+            log("hooked " + bn + " Activity#onBackPressed（诊断）");
+        } catch (Throwable t) {
+            log("back key hook 失败: " + t);
+        }
+    }
+
+    /** 找作品页那颗返回按钮；找不到返回 null。 */
+    private static View workBackButton(Activity a) {
+        try {
+            View decor = a.getWindow() == null ? null : a.getWindow().getDecorView();
+            if (decor == null) return null;
+            // ★ v0.1.80 修正：`nativeID` 不是宿主 APK 里的资源（`getIdentifier` 实测返回 0），
+            //   它是 RN 运行时挂在 View 上的 tag / 可访问性 viewId。
+            //   两条路都试：tag 快，可访问性兜底。
+            View v = findByNativeId(decor, "work-back-button", 0);
+            if (v == null || !v.isShown() || v.getWidth() <= 0 || v.getHeight() <= 0) return null;
+            return v;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** RN 的 {@code nativeID} tag 资源 id（第一次解析后缓存；0 = 不存在）。 */
+    private static volatile int sNativeIdTag = -2;
+
+    private static int nativeIdTag(View v) {
+        int t = sNativeIdTag;
+        if (t != -2) return t;
+        int got = 0;
+        try {
+            // RN 库的 R.id 并进宿主包资源表
+            got = v.getResources()
+                    .getIdentifier("view_tag_native_id", "id", v.getContext().getPackageName());
+        } catch (Throwable ignored) {
+        }
+        sNativeIdTag = got;
+        return got;
+    }
+
+    private static View findByNativeId(View v, String want, int depth) {
+        // ★ v0.1.80：深度上限 16 → 28。RN 这棵树到页头按钮要 18~22 层，
+        //   16 会把整个内容区剪掉（实测「一条都没打印」就是这个）。
+        if (v == null || depth > 28) return null;
+        try {
+            // 只看屏幕上方 20%：返回按钮不会在别处，避免整树开销
+            int[] loc = LOC.get();
+            v.getLocationOnScreen(loc);
+            if (loc[1] > (int) (sSH * 0.22f)) return null;
+            int tagId = nativeIdTag(v);
+            if (tagId != 0) {
+                Object tag = v.getTag(tagId);
+                if (tag instanceof String && want.equals(tag)) return v;
+            }
+            try {
+                android.view.accessibility.AccessibilityNodeInfo n = v.createAccessibilityNodeInfo();
+                if (n != null) {
+                    if (want.equals(n.getViewIdResourceName())) return v;
+                }
+            } catch (Throwable ignored) {
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                int n = g.getChildCount();
+                for (int i = 0; i < n; i++) {
+                    View r = findByNativeId(g.getChildAt(i), want, depth + 1);
+                    if (r != null) return r;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 有可见的压暗遮罩 ⇒ 这次返回键必须交给宿主（弹层优先）。 */
+    private static boolean dimOverlayShown(Activity a) {
+        try {
+            View decor = a.getWindow() == null ? null : a.getWindow().getDecorView();
+            return decor != null && scanDimOverlay(decor, 0);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean scanDimOverlay(View v, int depth) {
+        if (v == null || depth > 12) return false;
+        try {
+            if (v.getVisibility() == View.VISIBLE && v.getAlpha() > 0.05f) {
+                int w = v.getWidth();
+                int h = v.getHeight();
+                if (w * 100 >= (long) sSW * 90 && h * 100 >= (long) sSH * 70) {
+                    Drawable bg = v.getBackground();
+                    if (bg != null && isDimMask(bg)) return true;
+                }
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                int n = g.getChildCount();
+                for (int i = 0; i < n; i++) {
+                    if (scanDimOverlay(g.getChildAt(i), depth + 1)) return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * 返回键按下时先判「这一页有没有那颗返回按钮」：
+     * 有 ⇒ 吞掉这次按键，并在 100ms 后补一次点击（避开按键处理那一帧）。
+     */
+    private static boolean armBackTap(final Activity a) {
+        try {
+            if (dimOverlayShown(a)) return false;
+            View v = workBackButton(a);
+            if (v == null) {
+                dumpHeaderOnce(a);
+                return false;
+            }
+            MAIN.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        tapWorkBack(a);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, 100L);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 用一次「按下 + 抬起」代替点击（React 的按下态不走 OnClickListener，performClick 无效）。 */
+    private static boolean tapWorkBack(Activity a) {
+        try {
+            View v = workBackButton(a);
+            if (v == null) return false;
+            tapAt(v, a);
+            if (sBackTapLogs < 3) {
+                sBackTapLogs++;
+                log("back key -> work-back-button " + v.getWidth() + "x" + v.getHeight());
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 在窗口根上派发一次「按下 + 抬起」。
+     *
+     * <p>★ v0.1.80 修正：直接 {@code v.dispatchTouchEvent(...)} 对 React 的 Pressable
+     * <b>无效</b>（实测点了没反应）—— RN 的响应者系统是在<b>根视图</b>收到 DOWN 时
+     * 用 {@code TouchTargetHelper} 选定目标 tag 的，绕过根就等于没按。
+     * 这里改成从 DecorView 派发，坐标用屏幕坐标减去窗口原点换算回去。
+     */
+    private static boolean tapAt(View target, Activity a) {
+        try {
+            View decor = a.getWindow() == null ? null : a.getWindow().getDecorView();
+            if (decor == null) return false;
+            int[] sl = new int[2];
+            target.getLocationOnScreen(sl);
+            int[] dl = new int[2];
+            decor.getLocationOnScreen(dl);
+            float x = sl[0] - dl[0] + target.getWidth() / 2f;
+            float y = sl[1] - dl[1] + target.getHeight() / 2f;
+            long t = android.os.SystemClock.uptimeMillis();
+            android.view.MotionEvent down =
+                    android.view.MotionEvent.obtain(t, t, android.view.MotionEvent.ACTION_DOWN, x, y, 0);
+            decor.dispatchTouchEvent(down);
+            down.recycle();
+            android.view.MotionEvent up =
+                    android.view.MotionEvent.obtain(t, t + 40L, android.view.MotionEvent.ACTION_UP, x, y, 0);
+            decor.dispatchTouchEvent(up);
+            up.recycle();
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 「返回键改点击」的留痕条数。 */
+    private static volatile int sBackTapLogs;
+
+    /** 找不到返回按钮时把页头那几条打一次（每条：类名 / 尺寸 / 坐标 / 可访问性 id）。 */
+    private static void dumpHeaderOnce(Activity a) {
+        if (sBackDumps >= 3) return;
+        sBackDumps++;
+        try {
+            View decor = a.getWindow() == null ? null : a.getWindow().getDecorView();
+            if (decor == null) return;
+            StringBuilder sb = new StringBuilder("header dump tagId=" + sNativeIdTag);
+            dumpHeader(decor, 0, sb, 0);
+            log(sb.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static volatile int sBackDumps;
+
+    private static void dumpHeader(View v, int depth, StringBuilder sb, int lines) {
+        if (v == null || depth > 28 || lines > 24) return;
+        try {
+            int[] loc = LOC.get();
+            v.getLocationOnScreen(loc);
+            if (loc[1] > (int) (sSH * 0.22f)) return;
+            if (v.isShown() && v.getWidth() > 0) {
+                String id = null;
+                try {
+                    android.view.accessibility.AccessibilityNodeInfo n = v.createAccessibilityNodeInfo();
+                    if (n != null) id = n.getViewIdResourceName();
+                } catch (Throwable ignored) {
+                }
+                if (id != null || v.isClickable()) {
+                    sb.append('\n').append(' ').append(depth).append(' ').append(name(v))
+                            .append(' ').append(v.getWidth()).append('x').append(v.getHeight())
+                            .append(" @").append(loc[0]).append(',').append(loc[1])
+                            .append(" click=").append(v.isClickable() ? 1 : 0)
+                            .append(" a11y=").append(id == null ? "-" : id);
+                }
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                int n = g.getChildCount();
+                for (int i = 0; i < n; i++) {
+                    dumpHeader(g.getChildAt(i), depth + 1, sb, lines + 1);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ v0.1.85（r109 用户：方案 2）页面内容「挂载完成」→ 精确重绘这一页
+    // ══════════════════════════════════════════════════════════════════
+
+    /** 上一次「挂载重绘」的时刻（节流）。 */
+    private static volatile long sMountRepaintAt;
+
+    /** 这条钩子打过的 log 条数。 */
+    private static volatile int sMountLogs;
+
+    /**
+     * 页面切换 / 返回时偶尔还能看到「壁纸是模糊的」——这是因为目标页的背景层在
+     * <b>页面内容还没挂完</b>的那一瞬间就被画了一次，硬件加速把这次绘制记进了
+     * 它自己的 RenderNode；内容随后挂上，但没有人再 invalidate 那一层 ⇒ 错的那一帧留着。
+     *
+     * <p>r106 试过「定时乱拍」（ON_TOP 后 160/420ms、回前台 300/700ms），
+     * 结果是拍在封面还没挂上的时刻，把播放页封面打没了。
+     * 这次换成**事件驱动**：直接把 react-native-screens 的
+     * {@code ScreenContentWrapper#onViewAdded} 钩下来 —— 页面内容真正挂上去的那一刻，
+     * 才是「内容已就绪」的准确时刻。
+     *
+     * <h3>护栏（一条都不能少）</h3>
+     * <ul>
+     *   <li>只重绘**这一页的子树**（不走整窗，底栏 / 迷你条不参与）；</li>
+     *   <li>150ms 节流：一次导航里会连着挂好几个子 View，只认第一次；</li>
+     *   <li>**播放页直接跳过**（{@link #isPlayWindow} / {@link #playContext}）——
+     *       封面的救援路径不能被任何额外重绘打断，这是 r107 那次的教训；</li>
+     *   <li>找不到 rns 的类就退回 {@code ViewGroup#onViewAdded} + 类名过滤，
+     *       两者都拿不到就什么都不做（等于没装）。</li>
+     * </ul>
+     */
+    private static void hookScreenContentAdded(ClassLoader cl) {
+        int n = 0;
+        try {
+            Class<?> cw = null;
+            try {
+                cw = XposedCompat.findClass("com.swmansion.rnscreens.ScreenContentWrapper", cl);
+            } catch (Throwable ignored) {
+            }
+            if (cw != null) {
+                for (Method m : XposedCompat.findMethodsByName(cw, "onViewAdded")) {
+                    XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                        @Override
+                        protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                            try {
+                                Object self = chain.getThisObject();
+                                if (!(self instanceof View)) return;
+                                // ★ r109 修正：ScreenContentWrapper 并没有 override 这个方法，
+                                //   findMethodsByName 会回溯到 ViewGroup#onViewAdded ⇒ 这条钩子
+                                //   对**所有** ViewGroup 生效（日志第一发就是 DecorView）。
+                                //   必须自己按类名过滤，否则等于「每次 addView 都重绘一页」。
+                                String nm = ((View) self).getClass().getSimpleName();
+                                if (nm == null || !nm.contains("ScreenContentWrapper")) return;
+                                repaintPageAfterMount((View) self);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                    n++;
+                }
+            }
+            if (n == 0) {
+                // 兜底：框架的 ViewGroup#onViewAdded，自己按类名过滤
+                for (Method m : XposedCompat.findMethodsByName(android.view.ViewGroup.class, "onViewAdded")) {
+                    XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                        @Override
+                        protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                            try {
+                                Object self = chain.getThisObject();
+                                if (!(self instanceof View)) return;
+                                String nm = ((View) self).getClass().getSimpleName();
+                                if (nm != null && nm.contains("ScreenContentWrapper")) {
+                                    repaintPageAfterMount((View) self);
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                    n++;
+                }
+            }
+            log("hooked " + n + " ScreenContentWrapper#onViewAdded（挂载后精确重绘）");
+        } catch (Throwable t) {
+            log("挂载重绘钩子失败: " + t);
+        }
+    }
+
+    /** 页面内容挂上来的那一刻：40ms 后重绘这一页的子树（播放页不碰）。 */
+    private static void repaintPageAfterMount(final View page) {
+        try {
+            if (page == null || !page.isShown() || page.getWidth() <= 0) return;
+            long now = System.currentTimeMillis();
+            if (now - sMountRepaintAt < 150L) return;
+            // 播放页一律不碰（封面救援依赖它自己的时序）
+            if (isPlayWindow(page) || playContext(page)) return;
+            sMountRepaintAt = now;
+            // ★ r110：**两拍**。第一拍在「第一个子 View 挂上来」的瞬间 —— 那一刻页面还是空的，
+            //   背景层被按「空页面」判了一次（铺成毛玻璃/条带糊），这就是用户看到的
+            //   「返回主页时那 300ms 必定是模糊的」。第二拍等 rns 把内容真正挂完（+260ms）
+            //   再重绘一次，用「内容已就绪」的事实盖掉那一帧。
+            final long[] at = {40L, 260L};
+            for (final long delay : at) {
+                MAIN.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (!page.isShown()) return;
+                            // ★ r110：第一拍（页面还小）全子树重绘没问题；
+                            //   第二拍在转场动画中途，整子树重录会把媒体库那种几百个 View
+                            //   的网格一起作废（实测 99th 顶到 200ms）。所以第二拍只重录
+                            //   **占屏 ≥40% 且没有子 View 的背景层** —— 就是出错的那几层。
+                            if (delay > 100L) invalidateBigLeafs(page, 0, 0);
+                            else invalidateTree(page);
+                            if (sMountLogs < 8 && RemoteConfig.debugLog()) {
+                                sMountLogs++;
+                                log("mount repaint(" + delay + ") -> " + name(page) + " "
+                                        + page.getWidth() + "x" + page.getHeight());
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }, delay);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 只作废「大块叶子层」的 RenderNode（v0.1.86 / r110）。
+     *
+     * <p>用来修「空窗那一帧背景被判成毛玻璃」：这种层一定是<b>占屏很大、自己没有子 View</b>
+     * 的背景层。整子树重绘会把列表里几百个 View 一起重录（99th 直接顶到 200ms），
+     * 而这里只点 3~8 个节点，代价可以忽略。
+     *
+     * @return 已作废的层数
+     */
+    private static int invalidateBigLeafs(View v, int depth, int count) {
+        if (v == null || depth > 12 || count > 30) return count;
+        try {
+            int w = v.getWidth();
+            int h = v.getHeight();
+            boolean big = w > 0 && h > 0
+                    && (long) w * h * 100 >= (long) sSW * sSH * 40;
+            boolean leaf = !(v instanceof ViewGroup) || ((ViewGroup) v).getChildCount() == 0;
+            if (big && leaf) {
+                v.invalidate();
+                return count + 1;
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                int n = g.getChildCount();
+                for (int i = 0; i < n; i++) {
+                    count = invalidateBigLeafs(g.getChildAt(i), depth + 1, count);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return count;
+    }
+
+    private static void hookScreenSwitch(ClassLoader cl) {
+        try {
+            Class<?> sc = Class.forName("com.swmansion.rnscreens.Screen", false, cl);
+            int n = 0;
+            for (final Method m : sc.getDeclaredMethods()) {
+                if (!"setActivityState".equals(m.getName())) continue;
+                if (m.getParameterTypes().length != 1) continue;
+                try {
+                    final Method mm = m;
+                    android.util.Log.i("MoriSnap", "setActivityState sig="
+                            + java.util.Arrays.toString(m.getParameterTypes()));
+                    XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                        @Override
+                        protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                            try {
+                                Object self = chain.getThisObject();
+                                Object arg = chain.getArg(0);
+                                String st = arg instanceof Enum ? ((Enum<?>) arg).name() : String.valueOf(arg);
+                                armPageRepaint(self instanceof View ? (View) self : null, st);
+                                if (sActLeft > 0) {
+                                    sActLeft--;
+                                    android.util.Log.i("MoriSnap", "activityState " + st
+                                            + (self instanceof View
+                                                ? " " + ((View) self).getWidth() + "x"
+                                                  + ((View) self).getHeight() : ""));
+                                }
+                                // ★★★ v0.1.80（r104）：**r103 的「强制留在 ON_TOP」已删除。**
+                                //
+                                //   r103 的做法：只要某一屏被 setActivityState(INACTIVE/BELOW)，
+                                //   就立刻在 after 钩子里把它改回 ON_TOP，想让页面「一直挂在树里」
+                                //   从而没有返回空窗。真机实测的后果（用户 r104 第 1 / 3 条）：
+                                //   <pre>
+                                //   点「设定」→ 立即收听也还是 ON_TOP；再点「媒体库」→ 设定又变回 ON_TOP
+                                //   ⇒ ScreenContainer 里越挂越多（实测 kids=3 后停住），
+                                //   而子 View 的绘制顺序按挂载索引走 ⇒ 最后访问的那一屏永远盖在最上面
+                                //   ⇒ 底栏点左边没反应、作品夹从深处返回直接落到主页。
+                                //   </pre>
+                                //   即：这是**改写宿主导航状态机**，不是渲染层的事。
+                                //   本插件只做视觉，导航状态一律交还 react-native-screens。
+                                //   返回空窗（用户第 5 条）改用「不摘页」这条非侵入路径处理，
+                                //   见 {@link #tryDetachOff}。
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                    n++;
+                } catch (Throwable ignored) {
+                }
+            }
+            log("screen switch hook -> " + n);
+            android.util.Log.i("MoriSnap", "screen hook install n=" + n + " cls=" + sc.getName());
+        } catch (Throwable t) {
+            log("screen switch hook miss: " + t);
+            android.util.Log.i("MoriSnap", "screen hook miss: " + t);
+        }
+    }
+
+    /**
+     * 页面切换事件：**只记时间戳 + 一次非侵入的「别摘页」尝试**（v0.1.80 / r104）。
+     *
+     * <p>r88~r103 在这里做了两件重活（整窗 invalidate、22 条全树快照 × 8 秒），
+     * 用户 r104 第 5 条「返回主页后画面会抖一下」就是它们 —— 切页那一两百毫秒里
+     * 我们在主线程上遍历整棵树、拼字符串、逐条写 logcat。
+     *
+     * <p>现在：
+     * <ul>
+     *   <li>只写一个时间戳（其它判据用得到它）；</li>
+     *   <li>快照只在 {@code debugLog} 打开时拍，且**只拍一条**（当场那一瞬）；</li>
+     *   <li>顺手调一次 {@link #tryDetachOff}（关掉 react-native-screens 的「非活动页摘除」）。
+     *       这条路是官方支持的行为开关，<b>不改任何页面状态</b>；
+     *       页面一直在树里 ⇒ 返回时没有「重新挂载 + 重渲染」的空窗，
+     *       也就不需要 r103 那种把 activityState 硬改回 ON_TOP 的劫持。</li>
+     * </ul>
+     */
+    private static void armPageRepaint(final View anyScreenView, final String st) {
+        try {
+            sPageSwitchAt = System.currentTimeMillis();
+            sSnapFrom = sPageSwitchAt;
+            // ★ 空窗遮罩已按用户要求整条回退（r106 用户第 2 条：
+            //   「现在变成了所有页面切换都有了右滑的效果，而且还会卡顿一下，比之前更差」）。
+            //   回退范围：抓拍 + VeilView + 两条触发点，全部移除；抓拍函数本身保留给诊断用。
+            // ★ r107：r106 那两拍「页面上场后补重绘」已按用户要求撤回
+            //   （实测会把播放页封面弄丢 —— 补拍时封面那层还被判成「非当前页内容」）。
+            //   非侵入式：尽量让页面容器别把非活动页摘掉（失败即放弃，见 tryDetachOff）
+            tryDetachOff(anyScreenView);
+            if (!RemoteConfig.debugLog()) return;
+            snapArm(true);
+            sSnapAt = 0L;              // 允许这一发无条件打印
+            snapOnce();                // 只拍「切页那一瞬」这一条
+            if (sTraceLeft > 0) {
+                sTraceLeft--;
+                android.util.Log.i("MoriSnap", "page switch");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // r106：缩略图盖空窗**整条回退**（用户判定「更差」：所有切换都多了一次右滑 + 卡顿）。
+    // 只保留抓拍函数给诊断用；遮罩、VeilView、两条触发点都已删除。
+    // ══════════════════════════════════════════════════════════════════
+
+
+    private static String name0(Object o) {
+        try {
+            return o.getClass().getSimpleName();
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** r106：空窗遮罩整条回退，这里只留一个空壳（调用点已经删干净）。 */
+    private static void hideSnapVeil() {
     }
 
     /**
@@ -1415,8 +2192,13 @@ public final class BgPeel {
                     Object arg0 = chain.getArg(0);
                     v = self instanceof View ? (View) self : null;
                     cv = arg0 instanceof Canvas ? (Canvas) arg0 : null;
+                    // ★ r107：「月度回顾」弹窗底色那套改动已按用户要求全部移除
+                    //   （两次识别方案都没能在真机上生效：那层底图画一次就不再重画，
+                    //    而这棵 Dialog 树里既扫不到文字层、也没有稳定可用的 pager 信号）。
                     // ★★★ v0.1.44（r15 用户第 6 条）：防偷窥封面块记下来，
                     //   等**宿主画完**再叠强调色罩（见 privacyWash）。
+                    // ★★★ v0.1.88（r112）：作品封面屏蔽（View 路径的图片）
+                    if (cv != null && coverBlocked(v)) return null;
                     wash = v != null && cv != null && privacyWash(v);
                     // ★★★ v0.1.49：**封面外框那一层也要罩**（用户提议「直接替换掉宿主叠加的蒙层」）。
                     //   真机日志把结构打得很清楚：
@@ -1448,6 +2230,21 @@ public final class BgPeel {
                     // ★★★ v0.1.63：判定改用「这一秒刚铺过播放档底图」
                     //   （`sPlayPaintedAt`）—— 根这一层上 playContext/isPlayWindow
                     //   实测经常都是 false，这是 0.1.59 的 `paint root bg` 从未触发的真因。
+                    // ★★★ v0.1.79（r93）：**切页空窗用「上一帧画面」盖住。**
+                    //   r92 逐帧实证：左右划返回时，目标页要重渲染 ≈300ms，这 300ms 里
+                    //   页面区只剩壁纸（tab 栏、滚动条都在）——用户看到的就是「空白页」。
+                    //   宿主自己切 Activity 也是这么处理的（任务快照）。这里同源：
+                    //   空窗期内把 900ms 前抓下的整窗缩略图按原尺寸盖回去。
+                    // ★★★ v0.1.80（r94，按你的建议）：**跟着宿主做「向右划出」**。
+                    //   你说得对：宿主返回时是「当前页向右划出」，而我们上一版是把缩略图
+                    //   原地钉在窗口根上 —— 静态图不动、页面滑走，看起来还是一块空白，
+                    //   只是消失得快点。现在缩略图**按同样的方向与时长（260ms）向右平移 +
+                    //   淡出**，与宿主的滑动同向同行，视觉上就是「页面被划出去」。
+                    // ★★★ v0.1.86（r99 用户实测：**返回后画面会左右抖一下**）：遮罩已停用。
+                    //   原因：抓拍时机永远晚于「页面变空」那一刻（日志里 BLANK 与 snap cap 同毫秒），
+                    //   遮罩拿到的是空白帧；它唯一的效果是把「空白」换成「一张会动的空白」，
+                    //   于是你看到的是「到上一层之后又左右抖一次」，而空白并没有被盖住。
+                    //   结论：遮罩这条路走不通，删掉，不再产生任何额外绘制/抖动。
                     if (veilRoot && sArmed
                             && (System.currentTimeMillis() - sPlayPaintedAt < 1000L)) {
                         try {
@@ -1627,7 +2424,13 @@ public final class BgPeel {
                         //   改回「宿主照画 + 我们在上面叠色」，误判最坏只是颜色偏一点，
                         //   绝不会把内容吃掉。
                         // ① 宿主的「封面模糊底图」（blurRadius > 0）：换成 壁纸+用户模糊档
+                        // ★★★ v0.1.88（r112 用户第 2 条）：**作品封面屏蔽**——整层不画，位置留空，点击照旧
+                        if (coverBlocked(v)) {
+                            sPainted = true;
+                            return null;
+                        }
                         if (cv != null && paintBlurBg(v, cv)) {
+                            traceExpo(v, "big");
                             wash = false;
                             return null;
                         }
@@ -1636,18 +2439,26 @@ public final class BgPeel {
                         // ★★★ v0.1.41：改成「局部铺玻璃 + 把宿主那张紫图按低透明度叠回」，
                         //   坐标一律用本层尺寸（不再用整屏位图对齐，见 paintLocal）。
                         if (cv != null && paintDialogGlass(v, cv, chain::proceed)) {
+                            traceExpo(v, "dlg");
                             return null;
                         }
                         // ② 半透明氛围叠加图（PurePlay 顶部紫遮罩）：换成毛玻璃
                         if (cv != null && dropVeil(v, cv)) {
+                            traceExpo(v, "veil");
                             wash = false;
                             return null;
                         }
                         // ③ 不透明氛围底图（播放页 playbackspbackground）：换成本地壁纸（可按档位糊）
                         if (cv != null && paintAtmos(v, cv)) {
+                            traceExpo(v, "atmos");
                             wash = false;
                             return null;
                         }
+                        // v0.1.71（r73）：把「这块大图到底被谁接管 / 为什么没被接管」写成一行
+                        // 实时决策（logcat，每块图每秒最多一条）。
+                        // 之所以要它：r73 的层级探针只能看到 `P=paint play blur big` 这种
+                        // 历史归属 —— 分不清「这一刻仍在接管」还是「早先接管过一次」。
+                        traceExpo(v, "host");
                     }
                 } catch (Throwable ignored) {
                 }
@@ -1721,8 +2532,6 @@ public final class BgPeel {
                         int w = v.getWidth();
                         int h = v.getHeight();
                         if (w > 0 && h > 0
-                                && w * 100 >= (long) sSW * 40
-                                && h * 100 >= (long) sSH * 12
                                 && v.getAlpha() >= 0.05f
                                 // ★★★ v0.1.58（r58 adb 实测）：这个宿主的播放页背景是一张
                                 //   **满屏 SkiaTextureView（1272x2772）**。
@@ -1730,8 +2539,17 @@ public final class BgPeel {
                                 //   **不再依赖播放页判定** —— 只要它铺满整屏就直接接管。
                                 //   这样「迷你条往返后透明」也不会再漏：那一屏里
                                 //   playContext 常常还没成立，但 1272x2772 这张纹理在。
-                                && (playContext(v) || isPlayWindow(v)
-                                    || (w * 100 >= (long) sSW * 90 && h * 100 >= (long) sSH * 90))) {
+                                // ★★★ v0.1.84（r87 用户「开防偷窥后封面变壁纸模糊块」）：
+                                //   **只接管满屏 Skia，绝不再碰非满屏层。**
+                                //   之前这里还挂着 `playContext(v) || isPlayWindow(v)` 两道闸，
+                                //   它们会把「1272x954」这类非满屏 Skia 层也接管掉 ——
+                                //   而那块正是宿主开「防偷窥」后用 Skia 糊出来的**作品封面**（内容），
+                                //   一接管就把封面换成播放档壁纸 ⇒ 播放页封面不显示、
+                                //   媒体库「作品」的封面变成卡着当前壁纸的模糊块（r87）。
+                                //   且这两道闸只在「音频播放中」为真，正好对上「只有播放时才触发」。
+                                //   满屏底（1272x2772）另有 CoverDrawable 兜底；
+                                //   非满屏的 Skia 层里没有别的「底」了 —— 一律交还宿主去画。
+                                && (w * 100 >= (long) sSW * 90 && h * 100 >= (long) sSH * 90)) {
                             // ★★★ v0.1.58（r58 用户第 1 / 3 条）：**改「整屏贴图」，并且必有兜底**。
                             //
                             //   · 用户第 1 条「封面上方那条是不带模糊的自定义背景底部」=
@@ -2114,12 +2932,42 @@ public final class BgPeel {
             //   于是再加一条**纯几何**兜底：播放页 / 播放页窗口里、
             //   <b>贴页顶 + 满宽 + ≥18% 屏高</b> 的层一定是「背景横幅」而不是内容
             //   （作品封面是 contain 居中，永远不贴页顶）。
-            boolean topBanner = topOf(v) <= (int) (sSH * 0.06f);
+            //
+            // ★★★ v0.1.71（r73 adb 实证）：**这条几何兜底就是「作品封面永远不显示」的凶手，已删除。**
+            //   现场 trace（logcat MoriTrace，播放页停在前台）：
+            //   <pre>
+            //   ExpoImageView 1272x954 top=0 a=1.0 r=0 kind=0 bmp=500x500/sharp
+            //                  playCtx=1 playWin=1 float=1 -> big
+            //   ExpoImageView 1272x2772 top=0 r=10 kind=3 bmp=125x125/blur  -> big
+            //   ExpoImageView 1272x2913 top=0 r=0  kind=2 bmp=780x1688/blur -> big
+            //   </pre>
+            //   那块 1272x954 就是 <b>player-thumbnail（作品封面）</b>：位图是清晰的 500x500，
+            //   `blurRadius=0`、`isBlurredBitmap=0` —— 三条像素判据一条都不成立，
+            //   只有 `topBanner` 成立。原因是 {@code topOf} 用的是 {@code View#getTop()}
+            //   （**相对父容器**），封面装在 FrameLayout 里 ⇒ 永远是 0，于是「贴页顶」恒为真。
+            //   我们随即把这块封面矩形涂成壁纸并对宿主 `return null`（连它自己的 draw 都不调）
+            //   ⇒ 封面消失；被涂的壁纸与周围底图对齐方式不同 ⇒ 用户看到的「封面上方另一截壁纸」。
+            //
+            //   而 r54 当初要修的那块「宿主糊图」本来就有像素证据（`isBlurredBitmap` 为真），
+            //   几何兜底是多余的 —— 所以这里<b>只认模糊证据</b>：清晰的内容图永远不接管。
+            //
+            // ★★★ v0.1.74（r88 第 1 条「首次打开：色块只闪现在作品封面上方，1~2 秒恢复」）：
+            //   **高度门槛 18% → 70%，把「作品封面」这个尺寸档彻底排除。**
+            //   防偷窥开启后，作品封面<b>本身</b>就是一张「宿主糊好的图」——
+            //   于是 `isBlurredBitmap` 为真、尺寸 1272×954（≈34% 屏高）、
+            //   又挂在播放页里 ⇒ 上面这条判据在开页的<b>头几帧</b>（此时封面还是
+            //   `ExpoImageView`，还没换成 Skia 那个 1272x954 的糊封面）把它当成
+            //   「页面底图」接管掉 ⇒ 那块矩形被涂成壁纸（= 用户看到的「色块」）；
+            //   等宿主把封面换成 Skia 层（r87 已改成绝不接管非满屏 Skia）就恢复正常
+            //   ⇒ 画面「1~2 秒后自己好了」，与用户描述逐字吻合。
+            //
+            //   播放页真正的底图只有两张，实测高度是 100%（1272×2772）与 105%（1272×2913），
+            //   所以 70% 这条线既不误伤底图，又能把「内容尺寸」的图全部放回宿主。
+            //   （`paintAtmos` 的门槛是 80%，`paintPlayFallback` 是 92%，同一套量级。）
             boolean bigBlur = (playEarly || (isPlayWindow(v) && screenOf(v) == null))
-                    && w * 100 >= (long) sSW * 55 && h * 100 >= (long) sSH * 18
+                    && w * 100 >= (long) sSW * 55 && h * 100 >= (long) sSH * 70
                     && (blurRadiusOf(v) >= IMG_BLUR
-                        || isBlurredBitmap(privacyBitmapOf(v))
-                        || topBanner);
+                        || isBlurredBitmap(privacyBitmapOf(v)));
             if (bigBlur) {
                 Bitmap pb = playBmp();
                 if (pb != null && paintAligned(c, pb, v, new Rect(0, 0, w, h), false)) {
@@ -2141,8 +2989,45 @@ public final class BgPeel {
         //   于是用户看到「有时正常、有时背景透明/模糊不生效」。
         //   现在只要「满宽 + 贴顶 + ≥92% 屏高」就一定是页面底图：
         //   播放页铺播放档，其余页铺清晰壁纸 —— <b>任何情况下都不会让这层回到宿主手里</b>。
-        boolean fullBg = fillDecor && h * 100 >= (long) sSH * 92;
-        if (kind != IMG_BLUR && !fullBg) {
+        // ★★★ v0.1.75（r78 第 4 / 5 条）：**满屏的「内容图」不是页面底图。**
+        //   用户这两条：① 作品文件夹里的图片/漫画点开全不显示，滑动时是一块块
+        //   「和背景一样的图片块」；② 「概述」里的图片持续闪烁。
+        //   根因同一个：内容图（kind == IMG_CONTENT）只要<b>满屏 + 贴顶</b>，
+        //   就会命中下面这条 `fullBg`，于是被我们整块换成壁纸 ——
+        //   大图变壁纸 ⇒ 看不到；每帧重铺 ⇒ 闪烁。
+        //   页面底图（氛围图 / 模糊底）的 kind 是 ATMOS / BLUR，不是 CONTENT，
+        //   所以把 CONTENT 排除掉不影响播放页。
+        boolean fullBg = fillDecor && h * 100 >= (long) sSH * 92 && kind != IMG_CONTENT;
+        // ★ v0.1.76：满屏底图出现 = 「可能是播放页」的弱信号，只用来给心跳的
+        //   「主动扫进度条」放行 —— 免得在普通页面上每 500ms 白扫 400 个 View。
+        if (fullBg) sFullBgSeenAt = System.currentTimeMillis();
+        // ★★★ v0.1.77（r80 第 4 / 5 条）：**内容图一律不接管。**
+        //   用户这两条：本地缓存的图片点开不显示、概述里的图片干脆不加载了。
+        //   真凶就在下面这段：`kind == IMG_CONTENT` 且「满屏 + 贴顶 + 不在 Screen 里」
+        //   时，后面的条件全都不成立 ⇒ 不 return ⇒ 一路铺成壁纸。
+        //   而「本地缓存图能读到 BitmapDrawable、在线图读不到（Fresco）」正好解释了
+        //   「在线正常、本地不正常」—— 只有读得到 bitmap 的那条才会被判成 CONTENT。
+        // ★★★ v0.1.80（r104 用户第 2 条）：**「宿主声明了模糊半径的满屏层」是底，不是内容图。**
+        //
+        //   用户这一条：「偶尔」播放页背景会退回<b>模糊版的作品封面</b>。
+        //   那条路径正是这里：宿主的播放页底图是 {@code <作品封面> + blurRadius=10}
+        //   （先拿清晰封面、再由 expo 自己糊），我们读到的位图是<b>清晰</b>的
+        //   ⇒ {@code imgKind} 判成 IMG_CONTENT ⇒ 上面那行直接放行给宿主
+        //   ⇒ 屏幕上就是「糊掉的作品封面」。
+        //   而同一张底图如果宿主下发的是<b>已经糊好</b>的位图（缓存命中那一次），
+        //   kind 就是 IMG_BLUR ⇒ 我们接管 ⇒ 正常显示壁纸。
+        //   ——「偶尔」两个字就是这么来的。
+        //
+        //   判据收紧到三条同时成立（缺一不可）：
+        //     ① {@code radius > 0}：宿主**亲口声明**这层是模糊装饰
+        //        （{@link #blurRadiusOf} 内含「满屏 + 不在分页容器里」两道闸，
+        //        图片浏览那种满屏照片读不出半径，永远不会走到这里）；
+        //     ② 满屏 + 贴顶（{@code fillDecor}）；
+        //     ③ 它确实在播放页里（活体进度条 / 播放页窗口 / 播放页根子树）。
+        boolean blurDeclared = radius > 0 && fillDecor
+                && (playContext(v) || isPlayWindow(v) || underPlayRoot(v));
+        if (kind == IMG_CONTENT && !blurDeclared) return false;
+        if (kind != IMG_BLUR && !fullBg && !blurDeclared) {
             // veil / atmos 各有更精确的分支，这里不抢；
             // 只有「读不出像素的满屏底图」才兜底（r40 里 radius 时有时无，源头就是它）。
             if (kind != IMG_CONTENT || radius > 0 || !fillDecor || insideScreen(v)) return false;
@@ -2169,7 +3054,14 @@ public final class BgPeel {
         //   三层可能分别落到「清晰壁纸」和「播放档（壁纸+模糊）」两种底图上
         //   —— 那就是「背景被裁剪成几块 / 越来越多色彩切片」。
         //   窗口级旗子（2.5 秒 TTL）一置位，这个窗口里全部统一为播放档。
-        boolean play = playContext(v) || isPlayWindow(v);
+        // ★★★ v0.1.75（r78 第 1 条）：**时间窗口判据全部删除。**
+        //   上一版这里挂着 `sPlayOnScreenAt < 800ms`。它是「整个窗口里有一条活着的
+        //   进度条」的产物 —— 迷你播放条存在时它对<b>任何页面</b>都成立
+        //   ⇒ 首页 / 媒体库 / 设定也按「播放档」铺底、还跟着档位翻转去 invalidate
+        //   ⇒ 叠加成「迷你条在的时候滑动特别卡」。
+        //   现在只认对象级事实：播放窗口 / 播放页根子树 / 曾经被 paint play 画过。
+        boolean play = playContext(v) || isPlayWindow(v) || underPlayRoot(v)
+                || wasPaintedAsPlay(v);
         if (play) {
             markPlayWindow(v);
             // ★★★ v0.1.63：**记录「这一秒刚铺过播放档底图」**。
@@ -2179,9 +3071,62 @@ public final class BgPeel {
             sPlayPaintedAt = System.currentTimeMillis();
             // v0.1.67：播放页被认出来 ⇒ 顺手把层级写进日志（每 3 秒最多一次）
             auditPlayTree((View) v);
+            // v0.1.70：同一时刻也往 logcat 打一份「带坐标 + 归属」的层级（adb 可直读）
+            probePlayTree((View) v);
+        }
+        // ★★★ v0.1.74（r76 第 1 条的正解）：**档位翻转时强制重画这一层。**
+        //   档位（清晰壁纸 / 播放档模糊）是由 playContext 这类<b>会失效</b>的判据算的：
+        //   首次打开播放页的头几帧、以及回前台之后，判据常常还没恢复 ⇒ 这一层被画成
+        //   清晰壁纸，而这笔指令已经录进 RenderNode ⇒ 之后判据恢复了也不会重画，
+        //   屏幕就一直停在清晰版（用户：「回前台后背景不模糊了」）。
+        //   所以只要这一层的档位和「上一次画它时用的档位」不一致，就 invalidate 一次，
+        //   让它按新档位重录。翻转只发生一两次，代价可以忽略。
+        // ⚠️ 只允许「清晰 → 播放档」这一个方向的翻转重绘。
+        //   反向（播放档 → 清晰）如果也 invalidate，就会和 {@link #sPlayOnScreenAt}
+        //   那种<b>时变</b>判据形成来回翻转 ⇒ 每帧一次 invalidate ⇒ 整页疯狂重绘
+        //   （r77「页面上下滑动超级卡顿」的头号嫌疑）。
+        // ⚠️ v0.1.76：**只有「满屏底图」才值得为档位纠偏去 invalidate。**
+        //   迷你条存在时 `playContext` 对列表页的层也可能成立（都落到窗口根），
+        //   而滚动时每一张新出现的卡片都是「第一次」⇒ 每张卡片各来一次 invalidate
+        //   ⇒ 实测 50th 直接飙到 22ms。卡片本来也不该走播放档，这条闸把误伤关掉。
+        // ★★★ v0.1.79（r82 架构重做）：**播放页里的满屏底图，底板挂上后一律不画。**
+        //   这正是「一层对象级底板 + 其余全 drop」的另一半：
+        //   播放页根负责显示壁纸（background），子层只贡献自己的内容（封面/文字/控件）。
+        boolean wasPlayTier = wasPaintedAsPlay(v);
+        if (fullBg && sPlayRootBgBmp != null && underPlayRoot(v)) {
+            sPainted = true;
+            Rect rr = CLIP0.get();
+            rr.set(0, 0, w, h);
+            hit("drop play backdrop -> ", v, rr);
+            return true;
+        }
+        if (play && !wasPlayTier && fullBg) {
+            try {
+                v.invalidate();
+            } catch (Throwable ignored) {
+            }
         }
         Bitmap bmp = play ? playBmp() : sWpBmp;
         if (bmp == null) bmp = play ? sWpBarBmp : sWpBarBmp;
+        // ★★★ v0.1.74（r76 第三轮）：**不再 drop 内层满屏底图。**
+        //   上一版把它们 drop 掉，只留根层那个 drawable 当唯一底，
+        //   结果两条新问题同时冒出来：
+        //     · 根层的 drawable bounds 带 top inset(18px) ⇒ 屏幕最顶一条黑；
+        //     · 把裁剪扩到整层去补那条黑 ⇒ 又把宿主的「顶部压暗层」盖掉了
+        //       （用户：「第一次打开播放页，顶部区域不对」）。
+        //   内层那两张满屏底图（1272×2772 / 1272×2913）的 bounds 是<b>真正全屏</b>，
+        //   而且它们在宿主内容层<b>下面</b> ⇒ 交给它们画，顶部自然覆盖、也压不到 scrim。
+        try {
+            long nowT = System.currentTimeMillis();
+            if (nowT - sBgTraceAt > 500L && RemoteConfig.debugLog()) {
+                sBgTraceAt = nowT;
+                log("bgTrace " + name(v) + " " + w + "x" + h + " kind=" + kind
+                        + " r=" + radius + " full=" + (fullBg ? 1 : 0)
+                        + " play=" + (play ? 1 : 0) + " cs=" + canvasScale(v)
+                        + " bmp=" + (bmp == null ? "null" : "ok"));
+            }
+        } catch (Throwable ignored) {
+        }
         if (bmp == null) return false;
         Rect r = new Rect(0, 0, w, h);
         if (!paintAligned(c, bmp, v, r, false)) return false;
@@ -2207,9 +3152,12 @@ public final class BgPeel {
     private static volatile int sMidLogs;
     private static final int MID_LOG_BUDGET = 6;
 
-    /** 模糊底分类日志条数（v0.1.28）。 */
+    /** 「模糊底分类日志条数」（v0.1.28）。 */
     private static volatile int sBlurLogs;
     private static final int BLUR_LOG_BUDGET = 8;
+
+    /** ★ v0.1.72：底图层决策日志的上次输出时刻（1 秒 2 条限流）。 */
+    private static volatile long sBgTraceAt;
 
     /**
      * ★★ v0.1.25 用户第 3 条：<b>只糊面板这一块</b>（面板容器版）。
@@ -2350,7 +3298,13 @@ public final class BgPeel {
         //   音轨播放页跑在独立窗口里（dlg=1），里面那块 {@code ExpoImageView 1440x1080}
         //   是<b>封面横幅</b>；把它当「半透明面板底」铺成玻璃 ⇒ 封面被换掉
         //   ⇒ 用户连着两轮说「封面死都不显示」。
-        if (isPlayWindow(v) || playContext(v)) return false;
+        // ★★★ v0.1.81（r84 第 2 条「偶发：封面不显示」）：
+        //   判据从 `isPlayWindow || playContext` 换成**纯结构**的 `inPlayTree`。
+        //   原来那两条依赖活体进度条，在「首次打开 / 树重建」那几帧失效 ⇒
+        //   播放页里的封面横幅被当成「半透明面板底」铺成壁纸 ⇒ 封面永久消失
+        //   （用户 17:43:58 那张截图：背景是壁纸的模糊版、封面卡片没了）。
+        //   `inPlayTree` 走「祖先链里有没有满屏氛围底图」，与进度条无关 ⇒ 那几帧也成立。
+        if (inPlayTree(v)) return false;
         int w;
         int h;
         try {
@@ -2575,6 +3529,13 @@ public final class BgPeel {
         //   一旦它的位图被读成 RGBA 就会被当成氛围底整层换成壁纸 ⇒「作品封面不显示」。
         if (h * 100 < (long) sSH * 80) return false;
         if (!isTopAnchored(v, w, h)) return false;
+        // ★★★ v0.1.81（r84 第 3 条「图片点开完全不显示」）：
+        //   **图片浏览里的图一律放行** —— 这条保护 r22 只加在 `dropVeil` 里，
+        //   `paintAtmos` 一直漏着。图片查看器里那张图是「满宽 + 满高 + 贴顶」，
+        //   尺寸判据全部命中；只要 `imgKind` 把它读成 ATMOS（本地缓存的
+        //   BitmapDrawable 能读出 alpha，反而更容易被误分类），就会被整层换成壁纸
+        //   ⇒ 图不显示、滑动时是一块块「和背景一样的图块」。
+        if (insidePager(v)) return false;
         if (imgKind(v) != IMG_ATMOS) return false;
         // ★★ v0.1.27 用户第 4 / 6 条：这里以前画的是 {@code sWpPlayBmp}（播放页那张
         //   「壁纸 + f2PlayBlur」，默认 20% 模糊）—— 等于把<b>播放页的呈现</b>套到所有
@@ -2705,6 +3666,1108 @@ public final class BgPeel {
      * 上次揭出来害你点不动的那个全屏层带 {@code clickable}，
      * 而播放页内容容器（装封面/标题/按钮的那个）本身不接收点击。
      */
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ v0.1.70（r73）播放页「可 adb 直读」的层级探针
+    // ══════════════════════════════════════════════════════════════════
+    //
+    // 前 70 个版本卡在同一件事上：**证据拿不到**。
+    // LSPosed 的日志要用户手动导出 zip，往返一次十分钟，而且 `logOnce` 的 140 条
+    // 预算经常在到达播放页之前就被列表页的 key 吃光 —— r72 那次「`audit lift` 一条都没有」
+    // 就是预算被别的 key 占满造成的误判。
+    //
+    // 这一版把「播放页真实层级」直接写进 **logcat**（tag = MoriProbe）：
+    // 我这边 `adb logcat -s MoriProbe` 就能实时看到，不需要用户配合导出。
+    // 每一层都带三样以前查不到的东西：
+    //   ① 窗口坐标 [l,t,r,b] —— 接缝 / 错位只能靠坐标定案；
+    //   ② `P=` 这一层最后被哪个分支接管（见 {@link #PAINTER}），没被接管就没有这个字段；
+    //   ③ 图片层的 drawable 类名 / 位图尺寸 / 是否已经是糊的 / blurRadius / imgKind
+    //      —— 「封面到底是被我们盖掉了，还是宿主压根没画」一眼分开。
+
+    /** 每层最后被哪个绘制分支接管（前缀名，见 {@link #hit}）。 */
+    private static final java.util.Map<View, String> PAINTER =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<View, String>());
+
+    private static volatile long sProbeAt;
+    /** 层级探针额度（5 秒一次 ⇒ ≈17 分钟；用完自动停，不刷爆 logcat）。 */
+    private static volatile int sProbeLeft = 200;
+    private static volatile int sProbeSeq;
+    private static volatile int sProbeLines;
+
+    /** 每块大图「这一刻的接管决策」的最后打印时刻（1 秒节流）。 */
+    private static final java.util.Map<View, Long> TRACE_AT =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<View, Long>());
+
+    private static volatile int sTraceLeft = 200;
+
+    /**
+     * v0.1.71（r73）：ExpoImageView 的分支决策实时留痕（logcat tag = MoriTrace）。
+     *
+     * <p>为什么需要：层级探针里的 {@code P=paint play blur big} 只是<b>历史归属</b>，
+     * 分不清「此刻仍在接管」还是「动画中途接管过一次」。而「作品封面不见了」
+     * 这个结论必须落在「此刻谁没让宿主画」上，所以这里每帧把四个分支的结果
+     * 连同判据输入（尺寸 / top / blurRadius / 位图是否糊 / 是否播放页）一起打出来。
+     */
+    private static void traceExpo(View v, String who) {
+        try {
+            if (sTraceLeft <= 0) return;
+            if (sSW <= 0 || sSH <= 0) return;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w * 100 < (long) sSW * 55 || h * 100 < (long) sSH * 18) return;
+            Long last = TRACE_AT.get(v);
+            long now = System.currentTimeMillis();
+            if (last != null && now - last < 1000L) return;
+            TRACE_AT.put(v, now);
+            sTraceLeft--;
+            Bitmap b = privacyBitmapOf(v);
+            android.util.Log.i("MoriTrace", name(v) + " " + w + "x" + h
+                    + " top=" + topOf(v)
+                    + " a=" + alphaOf(v)
+                    + " r=" + blurRadiusOf(v)
+                    + " kind=" + imgKind(v)
+                    + " bmp=" + (b == null ? "none"
+                        : b.getWidth() + "x" + b.getHeight() + (isBlurredBitmap(b) ? "/blur" : "/sharp"))
+                    + " playCtx=" + (playContext(v) ? 1 : 0)
+                    + " playWin=" + (isPlayWindow(v) ? 1 : 0)
+                    + " float=" + (inFloatingLayer(v) ? 1 : 0)
+                    + " -> " + who);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** ★ v0.1.74（r88）：大层快照的窗口终点 / 上次时刻 / 剩余条数。 */
+    private static volatile long sSnapUntil;
+    private static volatile long sSnapAt;
+    private static volatile int sSnapLeft;
+
+    /**
+     * ★★★ v0.1.74（r88）：**开/关播放页那几秒的「大层时间线」**（logcat tag = MoriSnap）。
+     *
+     * <p>为什么要它：r88 的两个问题都发生在「一秒以内的一次转场」里 ——
+     * 「首次打开封面位置闪一下色块」「返回后页面空白」。层级探针（MoriProbe）
+     * 是事后拍的，永远拍不到那一瞬；而 r76 因为性能把心跳里的层级 dump 删掉了。
+     * 这里改成<b>按需</b>：只要出现一次 {@code paint play…} 命中就武装 8 秒窗口，
+     * 每 250ms 打一条「所有大块层」的摘要（类名 / 尺寸 / 屏内 top / alpha / 可见性 /
+     * 画笔归属），最多 28 条。稳态零开销（窗口外直接返回）。
+     */
+    /**
+     * 武装大层快照。
+     *
+     * @param force 页面切换事件用 true：**每次都重新给满 12 条**。
+     *              r89 是「用完了才补」，于是用户复现那一下只剩 1 条额度 ——
+     *              正好只录到「切换那一瞬」（DecorView INVISIBLE），看不到之后有没有恢复。
+     *              绘制路径（{@code hit}）用 false，避免播放页每帧命中把额度重置掉。
+     */
+    private static void snapArm(boolean force) {
+        // ★ v0.1.80（r104）：稳定优先 —— 诊断只在 debugLog 打开时跑。
+        if (!RemoteConfig.debugLog()) return;
+        long now = System.currentTimeMillis();
+        // ★ v0.1.87：**6 条 → 2 条**。这条只在「调试日志」打开时跑，但一次切页 6 次全树
+        //   dump 就是几百行 logcat（实测 15 秒 485 行），既是主线程开销也淹掉有用信息。
+        //   2 条足够看清「切页那一瞬」和「稳定后」。
+        if (force || now >= sSnapUntil) sSnapLeft = 2;
+        // 日志额度也要给切页留一份（sTraceLeft 会被图片 trace 吃光）
+        if (force) sTraceLeft = Math.max(sTraceLeft, 20);
+        sSnapUntil = now + 4000L;
+        if (force) sSnapStart = now;
+        // ★★★ v0.1.76（r90 实测教训）：**心跳是 3 秒一拍**（`postDelayed(this, 3000L)`），
+        //   挂在心跳里的快照 6 秒只能出 2 条 ⇒ 永远拍不到「空白稳定下来」的那一刻。
+        //   这里给它自己一条 400ms 的自转，只在武装窗口里跑，窗口一过自动停。
+        if (!sSnapLoopOn) {
+            sSnapLoopOn = true;
+            MAIN.postDelayed(SNAP_LOOP, 40L);
+        }
+    }
+
+    /** 快照自转开关（只在武装窗口里为 true）。 */
+    private static volatile boolean sSnapLoopOn;
+
+    /** 本次武装的时刻（用来决定前 2 秒用 120ms 密采样）。 */
+    private static volatile long sSnapStart;
+
+    private static final Runnable SNAP_LOOP = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                snapOnce();
+            } catch (Throwable ignored) {
+            }
+            boolean more;
+            try {
+                more = System.currentTimeMillis() < sSnapUntil && sSnapLeft > 0;
+            } catch (Throwable t) {
+                more = false;
+            }
+            if (more) {
+                // v0.1.76：切页后的**头 2 秒用 120ms**（用户实测「空白页闪得很快」，
+                // 400ms 采样会漏），之后回到 400ms。
+                long gap = System.currentTimeMillis() - sSnapStart < 2000L ? 250L : 400L;
+                try {
+                    MAIN.postDelayed(this, gap);
+                } catch (Throwable ignored) {
+                }
+            } else {
+                sSnapLoopOn = false;
+            }
+        }
+    };
+
+    private static void snapArm() {
+        snapArm(false);
+    }
+
+    /** 打一条大层快照（由 {@link #SNAP_LOOP} 每 400ms 调一次）。 */
+    private static void snapOnce() {
+        try {
+            long now = System.currentTimeMillis();
+            if (now > sSnapUntil || sSnapLeft <= 0) return;
+            if (now - sSnapAt < 300L) return;
+            sSnapAt = now;
+            sSnapLeft--;
+            View root = sLastRoot == null ? null : sLastRoot.get();
+            if (root == null) return;
+            // v0.1.76（r90）：把「整个窗口还在不在」也写进头行 —— r89 那一发只拿到
+            // `DecorView vis=4`（INVISIBLE）+ ScreenContainer 无子节点，分不清是
+            // 「窗口被宿主藏了」还是「页面被卸载了」。这三个值一起看才有结论。
+            StringBuilder sb = new StringBuilder("t=" + (now % 100000)
+                    + " winVis=" + root.getWindowVisibility()
+                    + " rootVis=" + root.getVisibility()
+                    + " shown=" + (root.isShown() ? 1 : 0));
+            snapWalk(root, 0, sb, 0);
+            android.util.Log.i("MoriSnap", sb.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void snapWalk(View v, int depth, StringBuilder sb, int lines) {
+        // ★ v0.1.87：单条快照 2200 → 900 字符（约 40 行 → 16 行）。
+        //   这条只在调试日志打开时跑，但一次切页仍可能打出上百行，把真正要看的东西冲掉。
+        if (v == null || depth > 16 || sb.length() > 900) return;
+        int w;
+        int h;
+        try {
+            w = v.getWidth();
+            h = v.getHeight();
+        } catch (Throwable t) {
+            return;
+        }
+        if (w <= 0 || h <= 0) return;
+        // 只关心「一眼能看出画面变了」的大块：≥50% 屏宽 或 ≥12% 屏高
+        boolean big = w * 100 >= (long) sSW * 50 || h * 100 >= (long) sSH * 12;
+        String painter = null;
+        try {
+            painter = PAINTER.get(v);
+        } catch (Throwable ignored) {
+        }
+        String cn = name(v);
+        // 页面容器（Screen*）无论大小都要打 —— 空白页要看的正是「它还在不在、有几个孩子」
+        boolean pageNode = cn.startsWith("Screen") || cn.contains("ContentWrapper");
+        if (big || painter != null || pageNode) {
+            int[] loc = LOC.get();
+            try {
+                v.getLocationInWindow(loc);
+            } catch (Throwable t) {
+                loc[0] = -1;
+                loc[1] = -1;
+            }
+            sb.append('\n').append(' ').append(depth).append(' ').append(cn)
+                    .append(' ').append(w).append('x').append(h)
+                    .append(" @").append(loc[0]).append(',').append(loc[1])
+                    .append(" a=").append(alphaOf(v))
+                    .append(" vis=").append(v.getVisibility())
+                    .append(" kids=").append(v instanceof ViewGroup
+                            ? ((ViewGroup) v).getChildCount() : 0)
+                    .append(painter == null ? "" : " P=").append(painter == null ? "" : painter);
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n; i++) {
+                snapWalk(g.getChildAt(i), depth + 1, sb, lines);
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ v0.1.77（r91）：空页看门狗
+    // ══════════════════════════════════════════════════════════════════
+
+    /** 最近一次页面切换的时刻（看门狗只在它之后 2 秒内做真判定）。 */
+    private static volatile long sPageSwitchAt;
+
+    /** v0.1.79：整窗缩略图（1/3 缩放），只用来盖「切页空窗」，不含内容语义。 */
+    private static volatile Bitmap sPageSnap;
+
+    /** 正在拍缩略图（此时不要往画布上盖缩略图，否则自噬）。 */
+    private static volatile boolean sCapturing;
+
+    /** 「向右划出」动画的起点（页面切换那一刻）。 */
+    private static volatile long sSnapFrom;
+
+    /** 上次稳态抓拍的时刻（2.5 秒一张）。 */
+    private static volatile long sSnapCapAt;
+
+    /** 当前真正可见的窗口根（sLastRoot 可能指向已摘下的视图，这里回落到 Activity 的 DecorView）。 */
+    private static View bestRoot() {
+        View r = sLastRoot == null ? null : sLastRoot.get();
+        if (r != null && r.isShown() && r.getWidth() > 0 && r.getHeight() > 0
+                && r.getWindowVisibility() == 0) {
+            return r;
+        }
+        Activity a = sPoll;
+        if (a != null) {
+            View d = decorOf(a);
+            if (d != null && d.isShown() && d.getWidth() > 0) return d;
+        }
+        return r;
+    }
+
+    /** 抓一张整窗缩略图（1/3 缩放）。 */
+    private static void capturePageSnap() {
+        if (sCapturing) return;
+        View root = bestRoot();
+        if (root == null || !root.isShown() || root.getWidth() <= 0 || root.getHeight() <= 0) return;
+        int w = Math.max(1, root.getWidth() / 3);
+        int h = Math.max(1, root.getHeight() / 3);
+        Bitmap bmp = null;
+        try {
+            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(bmp);
+            sCapturing = true;
+            c.scale(w / (float) root.getWidth(), h / (float) root.getHeight());
+            root.draw(c);
+            // ★ v0.1.81：**空帧不进仓库**。r93~r95 三次失败都是因为手里那张是空白帧，
+            //   拿它去盖空窗 = 把空白换成「一张会动的空白」。
+            if (looksBlank(bmp)) {
+                bmp.recycle();
+                bmp = null;
+                return;
+            }
+            Bitmap old = sPageSnap;
+            sPageSnap = bmp;
+            bmp = null;
+            if (old != null && !old.isRecycled()) old.recycle();
+            if (sTraceLeft > 0) {
+                sTraceLeft--;
+                android.util.Log.i("MoriSnap", "snap cap " + w + "x" + h);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            sCapturing = false;
+            if (bmp != null) {
+                try {
+                    bmp.recycle();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    /**
+     * 这张缩略图是不是「几乎全空」（v0.1.81）。
+     *
+     * <p>5×5 采样算亮度方差：空窗期抓到的是「壁纸 + 一片纯色」，方差极小；
+     * 正常页面有封面 / 文字 / 卡片，方差明显更大。采样 25 个像素，成本可忽略。
+     */
+    private static boolean looksBlank(Bitmap b) {
+        try {
+            int w = b.getWidth();
+            int h = b.getHeight();
+            if (w < 8 || h < 8) return true;
+            long sum = 0;
+            long sum2 = 0;
+            int n = 0;
+            for (int i = 1; i <= 5; i++) {
+                for (int j = 1; j <= 5; j++) {
+                    int px = b.getPixel(w * i / 6, h * j / 6);
+                    int lum = (((px >> 16) & 0xff) * 30 + ((px >> 8) & 0xff) * 59
+                            + (px & 0xff) * 11) / 100;
+                    sum += lum;
+                    sum2 += (long) lum * lum;
+                    n++;
+                }
+            }
+            double mean = sum / (double) n;
+            double var = sum2 / (double) n - mean * mean;
+            return var < 40d;          // 实测空窗帧方差 < 20，正常页 > 200
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 最近一次判定出「页面区域没有可见内容」的时刻（alpha 救援用）。 */
+    private static volatile long sBlankNow;
+
+    /** 看门狗上次检查 / 上次打印 / 已连中次数 / 剩余打印额度。 */
+    private static volatile long sBlankAt;
+    private static volatile long sBlankLogAt;
+    private static volatile int sBlankHits;
+    private static volatile int sBlankLeft = 20;
+
+    /**
+     * 每 300ms 检查一次：**窗口可见，但页面区域里没有任何“看得见的大块内容”** ⇒ 空页。
+     *
+     * <p>r90 的教训：按「页面切换事件」武装 12 条快照，抓到的是切换那一瞬或用户已经切走之后，
+     * 空白本身只有一两百毫秒，采样窗口对不上。这里改成<b>一直盯着</b>，
+     * 只在这个条件成立时打印 —— 不需要用户配合卡时间。
+     */
+    private static void blankWatch() {
+        try {
+            long now = System.currentTimeMillis();
+            // v0.1.77 实测：120ms 一拍会让 90th 从 12ms 涨到 61ms（这棵树的遍历不能这么快）。
+            // 退回 300ms，并且只在「已经命中过一次」之后才继续连拍 —— 稳态零负担。
+            if (now - sBlankAt < 300L) return;
+            sBlankAt = now;
+            if (sBlankLeft <= 0) return;
+            View root = sLastRoot == null ? null : sLastRoot.get();
+            if (root == null || !root.isShown() || root.getWindowVisibility() != 0) {
+                sBlankHits = 0;
+                return;
+            }
+            // v0.1.77 二次收敛：**只查一个 O(1) 的判据** —— ScreenContainer 还有没有孩子。
+            // 上一稿每 300ms 走一遍整棵树（每层取屏幕坐标），90th 从 12ms 掉到 36ms，
+            // 这是在修卡顿时重新制造卡顿。改成「每秒找一次容器（只走首链），
+            // 之后每 300ms 只看它的 childCount」。
+            // ★ v0.1.85：**无条件先找一次容器**（缓存 2 秒），顺带做
+            //   `setDetachInactiveScreens(false)` —— r98 里这条一次都没执行，
+            //   就是因为容器查找被挪到了 2 秒闸后面，而闸后的分支几乎不进。
+            screenContainerOf(root);
+            // v0.1.78 三稿：**只在「页面切换后 2 秒内」做一次真判定**。
+            //   r91 实测 ScreenContainer 的孩子一直在（快照里 kids=11），所以
+            //   「kids==0」这条判据是错的；真正空的是「看得见的内容」。
+            //   而这个判定要遍历子树，绝不能常开（90th 会从 12ms 涨到 36~61ms）。
+            if (System.currentTimeMillis() - sPageSwitchAt > 2000L) {
+                sBlankHits = 0;
+                return;
+            }
+            boolean empty = noVisiblePageContent(root, 0);
+            if (!empty) {
+                sBlankHits = 0;
+                return;
+            }
+            sBlankNow = System.currentTimeMillis();
+            // ★★★ v0.1.81（r95 实测）：空窗**不是**在页面切换那一刻，而是在切换后
+            //   ≈0.9 秒（`BLANK` 与 `snap cap` 同一毫秒）—— 所以遮罩动画必须从
+            //   「判出空页」这一刻起算，而不是从切换那一刻。否则窗口早过了，
+            //   遮罩一次都画不出来（r94 的 `snap draw` 为 0 就是这个）。
+            sSnapFrom = sBlankNow;
+            try {
+                sAuditAt = 0L;
+                auditPlayTree(root);
+            } catch (Throwable ignored) {
+            }
+            sBlankHits++;
+            if (sBlankHits < 1) return;                 // 一拍命中即记
+            if (now - sBlankLogAt < 2000L) return;      // 打印节流
+            sBlankLogAt = now;
+            sBlankLeft--;
+            StringBuilder sb = new StringBuilder("t=" + (now % 100000)
+                    + " BLANK winVis=" + root.getWindowVisibility()
+                    + " rootVis=" + root.getVisibility());
+            snapWalk(root, 0, sb, 0);
+            android.util.Log.i("MoriSnap", sb.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 空页看门狗的自转（300ms 一拍，永久运行；命中才打印）。 */
+    private static void startBlankWatch() {
+        try {
+            MAIN.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        blankWatch();
+                    } catch (Throwable ignored) {
+                    }
+                    try {
+                        MAIN.postDelayed(this, 300L);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, 3000L);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 只尝试一次：把 react-native-screens 的「非活动页不挂载」关掉。 */
+    private static volatile boolean sAttachTried;
+
+    /** v0.1.80：失败重试的节流时刻 / skip 日志条数。 */
+    private static volatile long sAttachAt;
+    private static volatile int sAttachLogs;
+
+    /** activityState 观测日志的独立额度（不受图片 trace 的额度挤占）。 */
+    private static volatile int sActLeft = 120;
+
+    /**
+     * ★★★ v0.1.87（r100）：把 react-native-screens 的「非活动页不挂载」关掉。
+     *
+     * <p>这是本轮唯一还没被否掉的根治方向：只要目标页一直挂在树里，
+     * 手势返回时就不存在「重新挂载 + 重渲染」的空窗（≈300ms）。
+     *
+     * <p>做法：从当前绘制中的 View 往上找到 `*ScreenContainer*` / `ScreenStack`，
+     * 依次尝试几个不同版本的方法名与字段名，**成功任何一个就算成功**，并把结果写进
+     * logcat（`MoriSnap detach OFF / fail: ...`）—— 这样我能在装完机后当场确认，
+     * 不用再靠导日志包猜。
+     */
+    private static void tryDetachOff(View any) {
+        // ★ v0.1.80（r104）：**失败不再锁死。**
+        //   旧实现一进来就把 sAttachTried 置真，于是 r100 那条「no container」
+        //   （翻页那一瞬 Screen 已经离树，祖先链断了）把这条修复永久废掉 ——
+        //   日志里只有一条 skip，之后再也没有任何尝试。
+        //   现在：只在**真正调成功**时锁死；失败按 800ms 节流后重试，
+        //   并且走「窗口根 → 首链」这条兜底路径去找容器。
+        if (sAttachTried || any == null) return;
+        long now = System.currentTimeMillis();
+        if (now - sAttachAt < 800L) return;
+        sAttachAt = now;
+        View cur = any;
+        View target = null;
+        try {
+            for (int i = 0; i < 16 && cur != null; i++) {
+                String cn = name(cur);
+                if (cn.contains("ScreenContainer") || cn.contains("ScreenStack")) {
+                    target = cur;
+                    break;
+                }
+                android.view.ViewParent p = cur.getParent();
+                cur = p instanceof View ? (View) p : null;
+            }
+            if (target == null) {
+                View root = any.getRootView();
+                if (root != null && root != any) target = screenContainerOf(root);
+            }
+        } catch (Throwable ignored) {
+        }
+        if (target == null) {
+            if (sAttachLogs < 3) {
+                sAttachLogs++;
+                android.util.Log.i("MoriSnap", "detach OFF skip: no container");
+            }
+            return;
+        }
+        String cls = target.getClass().getName();
+        String[] names = {"setDetachInactiveScreens", "setDetachScreens"};
+        for (String n : names) {
+            for (Class<?> c = target.getClass(); c != null && c != Object.class;
+                 c = c.getSuperclass()) {
+                try {
+                    java.lang.reflect.Method m = c.getDeclaredMethod(n, boolean.class);
+                    m.setAccessible(true);
+                    m.invoke(target, false);
+                    sAttachTried = true;
+                    android.util.Log.i("MoriSnap", "detach OFF ok " + cls + "#" + n);
+                    return;
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        // 再退一步：有些版本是字段而不是方法
+        String[] fields = {"detachInactiveScreens", "mDetachScreens"};
+        for (String f : fields) {
+            for (Class<?> c = target.getClass(); c != null && c != Object.class;
+                 c = c.getSuperclass()) {
+                try {
+                    java.lang.reflect.Field fd = c.getDeclaredField(f);
+                    fd.setAccessible(true);
+                    fd.setBoolean(target, false);
+                    sAttachTried = true;
+                    android.util.Log.i("MoriSnap", "detach OFF field " + cls + "#" + f);
+                    return;
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        android.util.Log.i("MoriSnap", "detach OFF fail: " + cls);
+    }
+
+    /**
+     * ★★★ v0.1.84（r98 根治尝试）：**让 react-native-screens 别把非活动页摘掉。**
+     *
+     * <p>本轮的空白已确认是「手势返回时，目标页被 detach（`Screen kids=0`），
+     * 重新挂载 + 重渲染 ≈300ms」。遮罩只是盖住，**真正的办法是让它别摘**。
+     * react-native-screens 在 Android 侧有 `detachInactiveScreens` 开关，
+     * 反射调用 `setDetachInactiveScreens(false)`；方法名不存在就什么都不做（零风险）。
+     */
+    private static void keepScreensAttached(View container) {
+        if (sAttachTried || container == null) return;
+        sAttachTried = true;
+        try {
+            java.lang.reflect.Method m = container.getClass()
+                    .getMethod("setDetachInactiveScreens", boolean.class);
+            m.invoke(container, false);
+            android.util.Log.i("MoriSnap", "detachInactiveScreens OFF");
+        } catch (Throwable t) {
+            android.util.Log.i("MoriSnap", "detachInactiveScreens fail: " + t);
+        }
+    }
+
+    /** 缓存的 ScreenContainer（2 秒刷新一次，避免每拍遍历整棵树）。 */
+    private static volatile java.lang.ref.WeakReference<View> sBoxRef;
+    private static volatile long sBoxAt;
+
+    /** 找页面容器：沿「首链」下潜，命中类名含 ScreenContainer 的节点。 */
+    private static View screenContainerOf(View root) {
+        try {
+            long now = System.currentTimeMillis();
+            View cached = sBoxRef == null ? null : sBoxRef.get();
+            if (cached != null && now - sBoxAt < 2000L) return cached;
+            sBoxAt = now;
+            View cur = root;
+            for (int i = 0; i < 14 && cur != null; i++) {
+                String cn = name(cur);
+                if (cn.contains("ScreenContainer")) {
+                    sBoxRef = new java.lang.ref.WeakReference<>(cur);
+                    // v0.1.80（r104）：统一走「多名字 + 字段兜底」的那个版本 ——
+                    // 旧路径用 getMethod（只找 public）失败后还会把 sAttachTried 置真，
+                    // 于是真正的尝试再也不会发生。
+                    tryDetachOff(cur);
+                    return cur;
+                }
+                if (!(cur instanceof ViewGroup)) return null;
+                ViewGroup g = (ViewGroup) cur;
+                if (g.getChildCount() == 0) return null;
+                cur = g.getChildAt(0);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 页面区域里有没有「面积≥3% 屏 + alpha≥0.5 + 可见」的内容层。 */
+    private static boolean noVisiblePageContent(View v, int depth) {
+        if (v == null || depth > 18) return true;
+        try {
+            if (v.getVisibility() != View.VISIBLE) return true;
+            if (v.getAlpha() < 0.5f) return true;
+        } catch (Throwable t) {
+            return true;
+        }
+        int w;
+        int h;
+        try {
+            w = v.getWidth();
+            h = v.getHeight();
+        } catch (Throwable t) {
+            return true;
+        }
+        int[] loc = LOC.get();
+        try {
+            v.getLocationInWindow(loc);
+        } catch (Throwable t) {
+            loc[0] = 0;
+            loc[1] = 0;
+        }
+        // 只统计「页面区域」（标题栏以下、迷你条以上）里的大块
+        boolean inPageArea = loc[1] >= (int) (sSH * 0.03f) && loc[1] < (int) (sSH * 0.80f);
+        if (inPageArea && w > 0 && h > 0
+                && (long) w * h >= (long) sSW * sSH / 33L && !isTextLike(v)) {
+            return false;   // 找到一块内容 ⇒ 不空
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n; i++) {
+                if (!noVisiblePageContent(g.getChildAt(i), depth + 1)) return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isTextLike(View v) {
+        try {
+            return v instanceof TextView || "ReactTextView".equals(name(v));
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 探针触发点：播放页被认出来的地方（见 paintBlurBg）。 */
+    private static void probePlayTree(final View any) {
+        try {
+            // ★★★ v0.1.87（r111）：探针只在「调试日志」打开时跑。
+            //   它要遍历整棵树、拼几十行字符串、再走 LSPosed 的日志通道 ——
+            //   在播放页静止时每 1.5 秒一次，属于纯诊断开销。
+            if (!RemoteConfig.debugLog()) return;
+            if (any == null) return;
+            long now = System.currentTimeMillis();
+            if (now - sProbeAt < 1500L) return;
+            if (sProbeLeft <= 0) return;
+            sProbeAt = now;
+            sProbeLeft--;
+            probeNow(any);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 定时探针：播放页是<b>静止画面</b>，宿主不重绘就再也进不到 {@code paintBlurBg}
+     * ⇒ 只在绘制路径上触发的话，一次只能拿到一帧（r73 实测：中途那一刻播放页
+     * 还没加进视图树，拿到的全是底下的列表页）。
+     * 这里挂一个 2 秒的心跳，只要「播放页进度条还活着」就再 dump 一次。
+     */
+    private static void startProbeLoop() {
+        try {
+            MAIN.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    int tick = ++sHeartTick;
+                    // ★ v0.1.74（r88）：大层时间线（只在「刚碰过播放页」的 8 秒窗口里跑）。
+                    //   武装条件 = 播放页此刻在屏 或 2 秒内刚在屏 —— 这样「返回」那一下
+                    //   （进度条已经 detach，但 sPlayOnScreenAt 还热）也会被录下来。
+                    try {
+                        if (System.currentTimeMillis() - sPlayOnScreenAt < 2000L) snapArm();
+                    } catch (Throwable ignored) {
+                    }
+                    // ★ v0.1.83：稳态抓拍（保证遮罩手里那张是「正常页面」）
+                    try {
+                        long t = System.currentTimeMillis();
+                        // ★ v0.1.81：2.5 秒 → 4 秒。整树软件绘制一次是几十毫秒，
+                        //   稳态里没必要这么勤；切页那一刻另外还有一次精准抓拍。
+                        if (t - sPageSwitchAt > 2000L && t - sSnapCapAt > 4000L) {
+                            sSnapCapAt = t;
+                            capturePageSnap();
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    // ★★★ v0.1.76（r79 第 1 条，实测 99th 350ms）：**心跳里不再 dump 层级。**
+                    //   「迷你条存在时首页滑动卡死」的极值帧就是这里：探测一次要遍历 24 层、
+                    //   拼 91 行字符串、再走 LSPosed 的日志通道 —— 单次上百毫秒。
+                    //   诊断价值已经用完（该拿的层级都拿到了），现在整段移除；
+                    //   需要时改由 {@code paintWallpaper} 的绘制路径按需触发。
+                    // ★★★ v0.1.72（r74 第 3 条）：**心跳里也要做一次 alpha 修复。**
+                    //   以前这条路只在 {@code View#draw} 里跑（{@link #auditPlayTree}），
+                    //   而播放页是静止画面、宿主不重绘就一次也不会进 —— 于是
+                    //   「容器被压成 0」「卡在 0.41」这两种残留可能一直挂到用户切页为止。
+                    //   只要播放页进度条还活着就补一次，不依赖任何重绘。
+                    try {
+                        View sk = sPlaySeek == null ? null : sPlaySeek.get();
+                        boolean shown = sk != null && sk.isShown();
+                        // ★ v0.1.72：把「播放页刚出现」当成事件来认领额度。
+                        //   ⚠️ 二稿：原来只看 `sk.isShown()` 的 false→true，真机上
+                        //   **迷你条状态下那句话一直是 true**（宿主用 alpha 隐藏播放页，
+                        //   `isShown()` 不看 alpha）⇒ 事件从不触发，额度用一次就没了。
+                        //   现在改看「播放页根那一层的 alpha 是否跨过 0.9」——
+                        //   收起时它被淡到 0.x，展开时又升回 1，这一跨就是展开的开始。
+                        // ★★★ v0.1.75（r78 第 2 / 3 条，方案 B）：**主动扫描进度条。**
+                        //   「迷你条 → 全屏」「首次打开」那 1~2 秒的透明/色块，
+                        //   根因是播放页识别晚了：`notePlaySeek` 只在<b>进度条自己重绘</b>
+                        //   时才会记账，而进度条的 RenderNode 常常是缓存的 ⇒ 一两秒都不跑。
+                        //   在那之前 playContext 全 false，底图按「普通页面」铺成清晰壁纸，
+                        //   并已录进 RenderNode ⇒ 之后判据恢复也不会重画。
+                        //   这里在心跳里主动扫一遍树，按「宽度 ≥40% 屏 + 高度 2%~9% 屏 +
+                        //   可见」把进度条找出来直接记账，绕开「等它自己重绘」。
+                        //   扫描 500ms 限流、只在还没有活体进度条时才做。
+                        try {
+                            // ★ v0.1.83：先把「播放页根是谁」算一次（500ms 限流），
+                            //   绘制路径只读 {link #sPlayRootRef}。
+                            refreshPlayRoot();
+                            View skNow = sPlaySeek == null ? null : sPlaySeek.get();
+                            // 只在「3 秒内见过满屏底图」时才扫：普通列表页不留这份开销。
+                            if ((skNow == null || !skNow.isShown())
+                                    && System.currentTimeMillis() - sFullBgSeenAt < 3000L) {
+                                View rt = sLastRoot == null ? null : sLastRoot.get();
+                                if (rt == null && sk != null) rt = sk.getRootView();
+                                scanPlaySeek(rt);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                        // ★★★ v0.1.74：**转场探测放在心跳里**（每 150ms 一次，代价可忽略），
+                        //   绘制路径只看 {@link #sTransitAt} 这个时间戳 —— 稳态零遍历。
+                        try {
+                            View tp = topFullScreenAncestor(sk);
+                            if (tp != null && Math.abs(treeScale(tp) - 1f) > 0.02f) {
+                                sTransitAt = System.currentTimeMillis();
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                        // ★★★ v0.1.74（r77 第 2 / 3 条）：**转场刚结束 ⇒ 立刻补一次重绘。**
+                        //   「迷你条 → 全屏」闪现透明、「首次打开」闪现色块，本质都是：
+                        //   转场那几帧各层用「转场中的 scale / 位置」把壁纸画了一遍，
+                        //   等转场结束（scale 回到 1）时这些层<b>没有重新录制</b>，
+                        //   屏幕上就停在那种错位/缺块的画面上，直到 1~2 秒后宿主偶然重绘。
+                        //   这里在「上一拍还在转场、这一拍不在了」的那一瞬补一次，
+                        //   把延迟从 1~2 秒压到「一次转场 + 一两帧」。
+                        boolean inTransit = System.currentTimeMillis() - sTransitAt < 250L;
+                        if (sWasTransit && !inTransit) {
+                            sRedoLeft = Math.max(sRedoLeft, 2);
+                            if (sRedoLogs < 12) {
+                                sRedoLogs++;
+                                log("play seam -> transit end");
+                            }
+                        }
+                        sWasTransit = inTransit;
+                        View top = topFullScreenAncestor(sk);
+                        float topA = top == null ? 1f : top.getAlpha();
+                        boolean visibleNow = topA >= 0.9f;
+                        java.lang.ref.WeakReference<View> seen = sSeekSeen;
+                        boolean newObj = sk != null && (seen == null || seen.get() != sk);
+                        // ★ v0.1.72 四稿：**只在「事件那一拍」补重绘，其余时间一律不动。**
+                        //   二稿是「只要额度还没用完就每拍都补」—— 转场期间连着重绘十几次，
+                        //   和宿主动画抢 GPU，用户反馈「打开关闭切换很卡顿」。
+                        //   现在把重绘钉死在事件上（那是唯一可能丢底图的时刻），
+                        //   于是心跳可以压得很密（150ms）而完全不影响流畅度。
+                        boolean seam = visibleNow && (!sPlayWasVisible || newObj);
+                        if (seam) {
+                            sRedoLeft = REDO_BUDGET;
+                            if (sRedoLogs < 6) {
+                                sRedoLogs++;
+                                log("play seam -> " + (newObj ? "new seek" : "visible")
+                                        + " a=" + topA);
+                            }
+                        }
+                        if (newObj) sSeekSeen = new java.lang.ref.WeakReference<>(sk);
+                        sPlayWasVisible = visibleNow;
+                        if (shown && sk.getRootView() != null) {
+                            // ★ v0.1.72：心跳本身就是「播放页此刻在屏」的最硬证据
+                            //   （进度条活着且 isShown）。满屏浮层的「不许留洞」兜底
+                            //   就看这个信号 —— 它不依赖「刚好有一张底图刚被重绘过」
+                            //   （实测播放页静止时底图 4 秒才画一次）。
+                            sPlayOnScreenAt = System.currentTimeMillis();
+                            // ★★★ 实测命中的那条路：**底图整块没画 ⇒ 让它重画一次。**
+                            //
+                            //   r74 现场（迷你条 → 后台 → 前台 → 再展开）：
+                            //   屏幕上是「播放页控件浮在曲目列表页上」，底图整块没了；
+                            //   而 probe 写着根层 `P=paint play screen bg`（历史归属），
+                            //   `draw` 汇总却是 `seen=8 wall=0 play=0` —— 说明这一帧真正绘制的
+                            //   那 8 个层里一个底图层都没有：底图（1272x2772 / 1272x2913）的
+                            //   RenderNode 没被重新录制，存的还是切后台前那次「跳过宿主绘制」的结果，
+                            //   Surface 重建后就什么都不剩 ⇒ 透出后面那一页。
+                            //   实证：同一个透明状态，把宿主切后台再切回前台（= 整树重绘一次）
+                            //   画面立刻恢复（r74 w3 → w4）。所以缺的不是判据，是一次重绘。
+                            //
+                            //   ⚠️ 三稿（用户实测「打开关闭切换很卡顿」后回撤）：
+                            //   二稿把心跳压到 150ms、额度给 12 次，等于转场期间
+                            //   每 150ms 强制重录一整段播放页（几十上百个 View + 纹理上传），
+                            //   和宿主的转场动画抢 GPU ⇒ 卡顿。
+                            //   四稿：额度只在 {@code seam} 事件上充满（见上），
+                            //   所以这里「还有额度」就等于「刚发生过一次展开/收起」——
+                            //   最多补 REDO_BUDGET 拍就自动停，不会在稳态里反复重绘。
+                            // ★★★ v0.1.73：**底板已经挂上就彻底不补重绘。**
+                            //   v0.1.72 的「补重绘」是为了弥补「canvas 绘制随 RenderNode
+                            //   一起丢」，现在底图是对象级的（background），
+                            //   RenderNode 复用也不会丢 ⇒ 再补就是纯浪费：
+                            //   转场里连续重录整段播放页，正是用户 r75 说的「掉帧」。
+                            // ★★★ v0.1.76：**只有「播放页真的在屏」才补重绘。**
+                            //   迷你条存在时 `sPlaySeek` 同样活着，但播放页根本不在前台；
+                            //   原来这里照样 invalidateTree(播放页根) —— 一旦额度被
+                            //   `apply()` 充满，就会在首页滑动期间反复重录一整棵隐藏的子树，
+                            //   实测 99th 掉到 350ms。
+                            if (sRedoLeft > 0 && sPlayRootBgBmp == null
+                                    && top != null && top.isShown()) {
+                                sRedoLeft--;
+                                final View seek = sk;
+                                MAIN.post(() -> {
+                                    try {
+                                        redoPlayBackdrop(seek);
+                                    } catch (Throwable ignored) {
+                                    }
+                                });
+                            }
+                            // ★★★ v0.1.76：**alpha 审计也移出心跳。**
+                            //   它同样要遍历整棵树（几百个 View + hasImageDeep 递归），
+                            //   每 12 秒一次、正好撞在滑动上就是一次长帧。
+                            //   改由绘制路径的 {@link #auditPlayTree}（3 秒限流）负责，
+                            //   播放页静止时那点残留本来也已经靠 redo 覆盖。
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    // ★ v0.1.72 诊断（默认不打，仅在「调试日志」打开时每 ~48 秒一条）。
+                    try {
+                        if (tick % 60 == 0 && RemoteConfig.debugLog()) {
+                            View sk2 = sPlaySeek == null ? null : sPlaySeek.get();
+                            log("heart sk=" + (sk2 == null ? "null"
+                                    : (sk2.isShown() ? "shown" : "hidden"))
+                                    + " redo=" + sRedoLeft
+                                    + " paintAge=" + (System.currentTimeMillis() - sPlayPaintedAt)
+                                    + " onScreenAge=" + (System.currentTimeMillis() - sPlayOnScreenAt));
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    try {
+                        MAIN.postDelayed(this, 3000L);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, 2500L);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 心跳计数（v0.1.72：150ms 一拍，重量级动作每 20 拍一次）。 */
+    private static volatile int sHeartTick;
+
+    /** 上一拍是否处在「树上还有 scale」的转场里（v0.1.74：转场收尾补重绘）。 */
+    private static volatile boolean sWasTransit;
+
+    /** 最近一次拿到过的窗口根（心跳里主动扫进度条用，v0.1.75）。 */
+    private static volatile java.lang.ref.WeakReference<View> sLastRoot;
+
+    /** 「主动扫进度条」的上次时刻 / 本次扫描计数。 */
+    private static volatile long sSeekScanAt;
+    private static volatile int sSeekScanCount;
+
+    /** 最近一次看到「满屏底图」的时刻（v0.1.76：只在这之后 3 秒内才去主动扫进度条）。 */
+    private static volatile long sFullBgSeenAt;
+
+    /**
+     * ★★★ v0.1.75（r78 第 2 / 3 条，方案 B）：主动把「播放页进度条」找出来。
+     *
+     * <p>为什么必须主动扫：`notePlaySeek` 是挂在 {@code View#draw} 上的，
+     * 而进度条那一层在宿主不重绘时压根不跑 draw（RenderNode 缓存）——
+     * 于是「播放页」要等 1~2 秒才被认出来，这段时间底图按普通页面铺成清晰壁纸，
+     * 并已录进 RenderNode，之后也不会重画 ⇒ 用户看到的透明 / 色块。
+     *
+     * <p>扫描条件只留形状：宽 ≥40% 屏、高 2%~9% 屏、可见、非文字。
+     * 命中就交给既有的 {@link #notePlaySeek} 去记账（它自己还有同页/矮条那套筛）。
+     */
+    private static void scanPlaySeek(View root) {
+        try {
+            if (root == null || sSW <= 0 || sSH <= 0) return;
+            long now = System.currentTimeMillis();
+            if (now - sSeekScanAt < 500L) return;
+            sSeekScanAt = now;
+            sSeekScanCount = 0;
+            scanSeekIn(root, 0);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void scanSeekIn(View v, int depth) {
+        if (v == null || depth > 22 || sSeekScanCount > 400) return;
+        sSeekScanCount++;
+        try {
+            if (v.isShown() && !(v instanceof android.widget.TextView)) {
+                int w = v.getWidth();
+                int h = v.getHeight();
+                if (w > 0 && h > 0
+                        && w * 100 >= (long) sSW * 40
+                        && h * 100 >= (long) sSH * 2
+                        && h * 100 <= (long) sSH * 9) {
+                    notePlaySeek(v);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n && sSeekScanCount <= 400; i++) {
+                scanSeekIn(g.getChildAt(i), depth + 1);
+            }
+        }
+    }
+
+    /** 每次「播放页重新出现」允许补几次重绘（事件后最多补 3 拍（150ms × 3））。 */
+    private static final int REDO_BUDGET = 3;
+
+    /**
+     * ★ v0.1.72：最近一次「确认播放页在屏」的时刻（2 秒心跳刷新，与「铺过底图」分开记）。
+     *
+     * <p>为什么要和 {@link #sPlayPaintedAt} 分开：播放页静止时那几张底图
+     * <b>4 秒才重绘一次</b>（r74 logcat `bgTrace` 时间戳 11:40:16/20/24/28），
+     * 拿「3 秒内铺过底」当信号必漏；而心跳只要进度条还活着就一定是「在屏」。
+     */
+    private static volatile long sPlayOnScreenAt;
+
+    /**
+     * 「补一次重绘」的剩余次数（v0.1.72）。
+     *
+     * <p>只在三个<b>事件</b>上充满（不按「铺过底图」充满 —— 播放页静止时底图
+     * 4 秒才画一次，拿它当信号会让重绘变成永不停止的低频心跳）：
+     * <ol>
+     *   <li>{@link #apply} —— 宿主回到前台；</li>
+     *   <li>心跳看到进度条 {@code isShown()} 由 false 变 true —— 播放页刚展开；</li>
+     *   <li>心跳看到 {@link #sPlaySeek} 换了对象 —— 播放页被重建。</li>
+     * </ol>
+     * 每次事件给 {@value #REDO_BUDGET} 次，600ms 一拍 ⇒ 最多 3 秒内自愈，之后彻底安静。
+     */
+    private static volatile int sRedoLeft = REDO_BUDGET;
+
+    /** 上一次心跳看到的「播放页根是否可见（alpha ≥ 0.9）」（用于识别展开事件）。 */
+    private static volatile boolean sPlayWasVisible;
+
+    /** 上一次心跳看到的进度条对象（用于识别播放页被重建）。 */
+    private static volatile java.lang.ref.WeakReference<View> sSeekSeen;
+
+    /** {@link #apply} 里重置重绘额度的上次时刻（1.5 秒限流）。 */
+    private static volatile long sResumeRedoAt;
+
+    /** 「补重绘」日志条数上限。 */
+    private static volatile int sRedoLogs;
+
+    /**
+     * 从进度条往上找「播放页根」：满足满屏尺寸的那一层里<b>最高</b>的。
+     *
+     * <p>播放页根（`/…/3 ReactViewGroup 1272x2772`）与它的外层浮层都会命中，取最高的那个，
+     * invalidate 一次就能把整棵子树（含底图）一起弄脏。
+     */
+    private static View topFullScreenAncestor(View v) {
+        if (v == null || sSW <= 0 || sSH <= 0) return null;
+        View firstFull = null;
+        View highest = null;
+        View cur = v;
+        try {
+            for (int i = 0; i < 24 && cur != null; i++) {
+                int w = cur.getWidth();
+                int h = cur.getHeight();
+                if (w * 100 >= (long) sSW * 85 && h * 100 >= (long) sSH * 50) highest = cur;
+                // 优先取「从进度条往上第一个真正满屏的层」——播放页里那就是
+                // `/…/3/0`（1272x2772），它的子树同时含封面/控制栏和两张满屏氛围底图，
+                // invalidate 它 = 只重录播放页这一段，不必把整棵 RN 树（几百个 View）
+                // 一起重录。取不到才退回「最高的满屏层」。
+                if (firstFull == null
+                        && w * 100 >= (long) sSW * 98 && h * 100 >= (long) sSH * 98) {
+                    firstFull = cur;
+                }
+                android.view.ViewParent p = cur.getParent();
+                cur = p instanceof View ? (View) p : null;
+            }
+        } catch (Throwable ignored) {
+        }
+        return firstFull != null ? firstFull : highest;
+    }
+
+    /**
+     * ★★★ v0.1.72（r74 第 3 条）：把播放页那几层底图的 RenderNode 弄脏，下一帧重录一次。
+     *
+     * <p>为什么必须是「重绘」而不是「再画一遍」：我们在 {@code View#draw} 里铺底，
+     * 硬件加速下这笔画被录进该 View 的 RenderNode。宿主切后台 / 重建 Surface 后
+     * 只要这个 RenderNode 没被重新录制，里面就还是旧结果 —— 而旧结果里宿主自己的
+     * 背景是<b>被我们 return true 跳过掉的</b>，于是整层空白。
+     * 让这条链 invalidate 一次，钩子就会重新跑，底图自然回来。
+     *
+     * <p>额度见 {@link #sRedoLeft}：由「回前台 / 播放页重新出现」这两个事件充满，
+     * 一次事件最多补 {@value #REDO_BUDGET} 拍就收手，不会变成持续耗电的心跳重绘。
+     */
+    private static void redoPlayBackdrop(View seek) {
+        try {
+            if (seek == null || sSW <= 0 || sSH <= 0) return;
+            View target = topFullScreenAncestor(seek);
+            if (target == null) return;
+            String nm = name(target) + " " + target.getWidth() + "x" + target.getHeight();
+            invalidateTree(target);
+            if (sRedoLogs < 4) {
+                sRedoLogs++;
+                log("redo play backdrop -> " + nm + " left=" + sRedoLeft);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * ★★★ v0.1.72（r74 第 3 条）：这层子树里是不是装着「那条活着的播放页进度条」。
+     *
+     * <p>这是本轮唯一新加的「结构性」判据，用来把两件外观完全相同的事分开：
+     * <ul>
+     *   <li><b>播放页内容容器被压成 alpha=0</b> —— 必须救，否则整页透出后面那一页；</li>
+     *   <li><b>宿主有意藏起来的模态</b>（R18 提示 / 触摸拦截层）—— 绝不能碰。</li>
+     * </ul>
+     * 两者的 alpha 都是 0、都是满屏、都装着图，靠属性<b>不可分</b>（r69/r72 两次踩过）。
+     * 但「播放页的进度条」是唯一的，R18 模态里不可能有它 ⇒ 走结构必然正确。
+     */
+    private static boolean containsPlaySeek(View v) {
+        if (v == null) return false;
+        java.lang.ref.WeakReference<View> ref = sPlaySeek;
+        if (ref == null) return false;
+        View sk = ref.get();
+        if (sk == null) return false;
+        try {
+            View cur = sk;
+            for (int i = 0; i < 40 && cur != null; i++) {
+                if (cur == v) return true;
+                android.view.ViewParent p = cur.getParent();
+                cur = p instanceof View ? (View) p : null;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    private static void probeNow(final View any) {
+        final View root;
+        try {
+            root = any.getRootView();
+        } catch (Throwable t) {
+            return;
+        }
+        if (root == null) return;
+        final int seq = ++sProbeSeq;
+        sProbeLines = 0;
+        MAIN.post(() -> {
+            try {
+                android.util.Log.i("MoriProbe", "==== probe #" + seq
+                        + " root=" + root.getWidth() + "x" + root.getHeight()
+                        + " sw=" + sSW + " sh=" + sSH + " fullW=" + sFullW
+                        + " playCtx=" + playContext(any)
+                        + " playWin=" + isPlayWindow(any));
+                probeWalk(root, 0, "");
+                android.util.Log.i("MoriProbe", "==== probe #" + seq + " end lines=" + sProbeLines);
+            } catch (Throwable t) {
+                android.util.Log.i("MoriProbe", "probe fail " + t);
+            }
+        });
+    }
+
+    /** 逐层 dump：深度 + 子索引路径 + 类名 + 窗口矩形 + alpha/vis/clk + 接管者 + 位图身份。 */
+    private static void probeWalk(View v, int depth, String path) {
+        if (v == null || depth > 24) return;
+        if (sProbeLines > 90) return;
+        try {
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w <= 0 || h <= 0) return;
+            int[] loc = LOC.get();
+            v.getLocationInWindow(loc);
+            StringBuilder sb = new StringBuilder(220);
+            sb.append(depth).append(' ').append(path).append(' ').append(name(v))
+                    .append(" [").append(loc[0]).append(',').append(loc[1]).append(',')
+                    .append(loc[0] + w).append(',').append(loc[1] + h).append(']')
+                    .append(" a=").append(v.getAlpha())
+                    .append(" vis=").append(v.getVisibility())
+                    .append(" clk=").append(v.isClickable() ? 1 : 0);
+            android.graphics.drawable.Drawable bg = v.getBackground();
+            if (bg != null) sb.append(" bg=").append(bg.getClass().getSimpleName());
+            String painter = PAINTER.get(v);
+            if (painter != null) sb.append(" P=").append(painter);
+            if (v instanceof android.widget.ImageView) {
+                android.graphics.drawable.Drawable d =
+                        ((android.widget.ImageView) v).getDrawable();
+                sb.append(" drw=").append(d == null ? "null" : d.getClass().getSimpleName())
+                        .append('/').append(d == null ? 0 : d.getIntrinsicWidth())
+                        .append('x').append(d == null ? 0 : d.getIntrinsicHeight());
+                Bitmap b = privacyBitmapOf(v);
+                if (b != null) {
+                    sb.append(" bmp=").append(b.getWidth()).append('x').append(b.getHeight())
+                            .append('/').append(b.getConfig())
+                            .append(" blurred=").append(isBlurredBitmap(b) ? 1 : 0);
+                } else {
+                    sb.append(" bmp=none");
+                }
+                sb.append(" r=").append(blurRadiusOf(v))
+                        .append(" kind=").append(imgKind(v));
+            }
+            android.util.Log.i("MoriProbe", sb.toString());
+            sProbeLines++;
+            if (v instanceof android.view.ViewGroup) {
+                // 底下的 react-navigation 页面（列表/详情）整棵跳过：r73 实测它一次就吃掉
+                // 80 行，把真正的播放页挤出输出（探针 #1 全是列表页就是这个原因）。
+                String cn = name(v);
+                if ("ScreenContainer".equals(cn) || "ReactScrollView".equals(cn)
+                        || "RecyclerViewImpl".equals(cn) || "ViewPager2".equals(cn)) {
+                    return;
+                }
+                android.view.ViewGroup g = (android.view.ViewGroup) v;
+                int n = g.getChildCount();
+                for (int i = 0; i < n; i++) {
+                    probeWalk(g.getChildAt(i), depth + 1, path + "/" + i);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static void auditPlayTree(final View any) {
         try {
             long now = System.currentTimeMillis();
@@ -2715,9 +4778,11 @@ public final class BgPeel {
             MAIN.post(() -> {
                 try {
                     sAuditLines = 0;
-                    log("=== play tree dump v0.1.67 ===");
+                    sAuditNodes = 0;
+                    final boolean dbg = RemoteConfig.debugLog();
+                    if (dbg) log("=== play tree dump v0.1.67 ===");
                     walkPlay(root, 0);
-                    log("=== play tree end ===");
+                    if (dbg) log("=== play tree end ===");
                 } catch (Throwable ignored) {
                 }
             });
@@ -2741,20 +4806,28 @@ public final class BgPeel {
      */
     private static void walkPlay(View v, int depth) {
         if (v == null || depth > 30 || sAuditLines > 120) return;
+        // ★★★ v0.1.87（r111）：**日志部分挂到「调试日志」开关后面，修复部分照旧跑。**
+        //   这个方法每 3 秒在主线程遍历整棵树；原来即使只是「记录」，
+        //   也要为每一层拼 name()/chainOf() 字符串、再走一次 logcat 通道。
+        final boolean dbg = RemoteConfig.debugLog();
+        // 关着日志时用节点数兜一个遍历上限（原来靠 sAuditLines 的 120 行封顶）
+        if (!dbg && ++sAuditNodes > 400) return;
         int w = v.getWidth();
         int h = v.getHeight();
         if (w > 0 && h > 0) {
             long area = (long) w * (long) h;
             if (v instanceof android.widget.ImageView) {
-                sAuditLines++;
                 float a = v.getAlpha();
-                log("img " + name(v) + " " + w + "x" + h + " a=" + a
-                        + (drawableReady(v) ? " D" : " -") + chainOf(v, 4));
+                if (dbg) {
+                    sAuditLines++;
+                    log("img " + name(v) + " " + w + "x" + h + " a=" + a
+                            + (drawableReady(v) ? " D" : " -") + chainOf(v, 4));
+                }
                 // 内容图被淡到看不见 ⇒ 直接拉回 1（封面就是卡在这一步）
                 if (a < 0.35f && w * 100 >= (long) sSW * 40
                         && h * 100 >= (long) sSH * 12) {
                     v.setAlpha(1f);
-                    log("img lift -> " + name(v) + " " + w + "x" + h + " from a=" + a);
+                    if (dbg) log("img lift -> " + name(v) + " " + w + "x" + h + " from a=" + a);
                 }
             } else if (v.getAlpha() < 0.05f && area * 100L >= (long) sSW * (long) sSH * 3L) {
                 // ★★★ v0.1.69（r72 实测）：**只记日志，绝不拉 alpha**。
@@ -2764,10 +4837,36 @@ public final class BgPeel {
                 //   ⇒「alpha=0 + 子树里有图 + 不可点击」这条判据根本不能用来区分
                 //   「该显示的播放页」和「宿主故意藏起来的模态」：两者长得一模一样。
                 //   所以这一类**永远不再动**（容器级 alpha 一律不碰），只记录。
-                boolean img = hasImageDeep(v, 0);
-                sAuditLines++;
-                log("dim " + name(v) + " " + w + "x" + h + " a=" + v.getAlpha()
-                        + (v.isClickable() ? " CLICK" : "") + (img ? " IMG" : "") + chainOf(v, 2));
+                if (dbg) {
+                    boolean img = hasImageDeep(v, 0);
+                    sAuditLines++;
+                    log("dim " + name(v) + " " + w + "x" + h + " a=" + v.getAlpha()
+                            + (v.isClickable() ? " CLICK" : "") + (img ? " IMG" : "") + chainOf(v, 2));
+                }
+                // ★★★ v0.1.72（r74 第 3 条）：**这一类里有一个子集必须救回来。**
+                //   r72 的结论「alpha=0 一律不动」是为了不揭开 R18 提示模态，
+                //   但「播放页内容容器被压成 0」和它长得一模一样 —— 而那是
+                //   「收成迷你条 → 再展开之后整页透出后面那一页」的<b>唯一</b>成因
+                //   （r68 dump 原文：`ReactViewGroup 0,0-1272,2772 alpha=0.0`，
+                //   封面/标题/按钮全在里面且都好好的）。
+                //   现在用一条**结构性**判据把它们分开，不再靠 alpha 猜：
+                //   只有「<b>这层子树里装着那条活着的进度条</b>」才拉回来。
+                //   R18 模态里不可能有播放页的进度条 ⇒ 结构上不可能误揭；
+                //   反过来，播放页的内容容器必然包着进度条 ⇒ 该救的一定救得到。
+                if (containsPlaySeek(v)) {
+                    float a0 = v.getAlpha();
+                    v.setAlpha(1f);
+                    if (dbg) {
+                        log("play dim lift -> " + name(v) + " " + w + "x" + h
+                                + " from a=" + a0);
+                    }
+                } else if (false) {
+                    // ★★★ v0.1.82（r96 用户实测：**R18 限制页被揭开了**）：这条已彻底删除。
+                    //   我 r92 想用「切页后 2.5 秒内把满屏 alpha=0 的容器拉回 1」去救空白，
+                    //   而 R18 限制页<b>正好就是</b>「满屏 + alpha=0 + 子树有内容 + 不可点击」——
+                    //   判据在结构上和「被压成 0 的页面容器」完全同形，r69/r72 已经踩过这个坑，
+                    //   我又踩了一次。空白改用「缩略图遮罩」，**容器级 alpha 一律不再碰**。
+                }
             } else if (v.getAlpha() < 0.98f && !v.isClickable()
                     && w * 100 >= (long) sSW * 90
                     && h * 100 >= (long) sSH * 55) {
@@ -2784,14 +4883,18 @@ public final class BgPeel {
                 //     宿主有意藏起来的模态是**恰好 0**，这里是**0 和 1 之间**。
                 //     只把「中途值补完」，绝不去碰 0 —— 这样不会重演 r69/r72 的揭模态事故。
                 float a = v.getAlpha();
-                sAuditLines++;
-                log("mid " + name(v) + " " + w + "x" + h + " a=" + a + chainOf(v, 2));
+                if (dbg) {
+                    sAuditLines++;
+                    log("mid " + name(v) + " " + w + "x" + h + " a=" + a + chainOf(v, 2));
+                }
                 v.setAlpha(1f);
-                log("mid lift -> " + name(v) + " " + w + "x" + h + " from a=" + a);
+                if (dbg) log("mid lift -> " + name(v) + " " + w + "x" + h + " from a=" + a);
             } else if (depth >= 6 && area * 100L >= (long) sSW * (long) sSH * 20L) {
-                sAuditLines++;
-                log("big " + name(v) + " " + w + "x" + h + " a=" + v.getAlpha()
-                        + (v.isClickable() ? " CLICK" : "") + chainOf(v, 2));
+                if (dbg) {
+                    sAuditLines++;
+                    log("big " + name(v) + " " + w + "x" + h + " a=" + v.getAlpha()
+                            + (v.isClickable() ? " CLICK" : "") + chainOf(v, 2));
+                }
             }
         }
         if (v instanceof android.view.ViewGroup) {
@@ -3048,16 +5151,31 @@ public final class BgPeel {
         float sc = 1f;
         try {
             View cur = v;
-            for (int i = 0; i < 8 && cur != null; i++) {
-                sc *= cur.getScaleX();
+            // ★★★ v0.1.72（r74）：8 层不够 —— 播放页的 scale 挂得比这更深
+            //   （DecorView→…→ReactSurfaceView→…→Screen 容器→播放页根）。
+            // ★★★ v0.1.74（r77「上下滑动超级卡顿」）：**稳态只数 6 层**。
+            //   这个方法在每次 {@code paintAligned} 里都要跑，列表页滚动时一帧几百层，
+            //   16 层 ≈ 32 次 getter × 几百层 —— 纯属白烧 CPU（稳态根本没有 scale）。
+            //   现在：近 600ms 内没见过任何 scale ⇒ 只数 6 层；一旦真的数出 scale，
+            //   就置 {@link #sTransitAt} 并把窗口期改成 16 层完整遍历。
+            int depth = System.currentTimeMillis() - sTransitAt < 600L ? 16 : 6;
+            for (int i = 0; i < depth && cur != null; i++) {
+                float sx = cur.getScaleX();
+                float sy = cur.getScaleY();
+                if (Math.abs(sx - sy) > 0.01f) return 1f;
+                sc *= sx;
                 android.view.ViewParent p = cur.getParent();
                 cur = p instanceof View ? (View) p : null;
             }
+            if (Math.abs(sc - 1f) > 0.02f) sTransitAt = System.currentTimeMillis();
         } catch (Throwable ignored) {
             return 1f;
         }
         return sc;
     }
+
+    /** 最近一次「树上有 scale」的时刻（v0.1.74：用于 treeScale 的快慢路径切换）。 */
+    private static volatile long sTransitAt;
 
     /**
      * 贴屏幕顶，或者本身就满屏（报告里两张氛围图各占一种）。
@@ -3290,7 +5408,22 @@ public final class BgPeel {
                 avg = avgAlpha(probe);
                 // ★ v0.1.22：三段式。只有「真的半透明叠加」才允许留洞（整层不画），
                 //   其余一律当底图原地换壁纸 —— 见 VEIL_DROP_MAX_ALPHA 的注释。
-                kind = avg < VEIL_DROP_MAX_ALPHA ? IMG_VEIL : IMG_ATMOS;
+                // ★★★ v0.1.82（r85 第 2 条「缓存图不显示、在线图正常」的真凶）：
+                //   **「有 alpha 通道」不等于「半透明」。**
+                //   本地缓存的图是 PNG（带 alpha 通道，但像素 alpha 全是 255），
+                //   于是 `hasA == true` ⇒ 被判成 IMG_ATMOS ⇒ 被 `paintAtmos`
+                //   整层换成壁纸 ⇒ 图不显示；
+                //   而在线图是 JPEG（无 alpha 通道）⇒ `hasA == false` ⇒ IMG_CONTENT
+                //   ⇒ 放行 ⇒ 正常显示。**这正是「在线正常、本地不正常」的全部原因。**
+                //   现在按<b>像素实际不透明度</b>再分一层：avg ≥ 0.97 就是内容图。
+                //   播放页那些装饰底图不靠这条（它们在 3928 行就按 blurRadius 命中 IMG_BLUR）。
+                if (avg < VEIL_DROP_MAX_ALPHA) {
+                    kind = IMG_VEIL;
+                } else if (avg >= 0.97f) {
+                    kind = IMG_CONTENT;
+                } else {
+                    kind = IMG_ATMOS;
+                }
             }
             if (probe != b) {
                 try {
@@ -4038,7 +6171,74 @@ public final class BgPeel {
      * 或者 seekbar 刚加载过的 1.5 秒窗口（{@link #isPlayPage}，兜第一次进播放页那一帧 ——
      * 那时进度条可能还没 layout 完）。
      */
+    /**
+     * ★★★ v0.1.76（r79 第 1 条，`50th 20ms` 的真凶）：**一帧只算一次 `playContext`。**
+     *
+     * <p>`playContext` 内部是 {@code isPlayLive → samePage → pageAnchorOf}，
+     * 而 `pageAnchorOf` 要<b>沿父链一路找到 Screen 容器</b>。绘制路径是「每一层每一帧」
+     * 都问一次 ⇒ 迷你播放条存在（`sPlaySeek` 非空）时，一帧就是几千次父链遍历，
+     * 直接把 CPU 帧时间顶到 20ms。
+     *
+     * <p>而「这一屏是不是播放页」这个问题<b>一帧内只有一个答案</b>。
+     * 所以这里加 16ms 的结果缓存：同一帧内复用它，稳态下每帧只真正算一次。
+     */
     private static boolean playContext(View v) {
+        long now = System.currentTimeMillis();
+        // ★★★ v0.1.84（r108 路径 1）：**缓存从「一帧一个值」改成「一页一个值」**。
+        //
+        //   旧实现（r79 为了把 50th 从 20ms 压下来）是一帧一个全局答案。问题在
+        //   「同一帧里可能同时存在两个页面」的时候：回前台重建的那一帧，被 rns 挪走的
+        //   播放页仍在树里、仍在 draw，它先把缓存算成 true，紧接着**刚挂上来的
+        //   作品页大层**直接吃到这个 true ⇒ 整页铺成播放档（壁纸 + 播放模糊），
+        //   而这一层录进 RenderNode 之后再没人重画 ⇒ 一直糊着（用户 r106 第 1 条）。
+        //
+        //   现在：帧窗口（16ms）内按<b>页面锚点</b>分桶，一页一个答案。
+        //   为了不回到 r79 那个「每层每帧都爬父链」的老路，加了按 View 记忆的
+        //   帧内 memo（{@link #PC_ANCHOR}），每个 View 一帧最多爬一次父链。
+        View anchor = anchorCached(v);
+        if (now - sPcAt >= 16L) {
+            sPcAt = now;
+            PC_ANCHOR.clear();
+            PC_BOOL.clear();
+            if (PC_BOOL.size() > 64) PC_BOOL.clear();
+        }
+        Boolean cached = PC_BOOL.get(anchor);
+        if (cached != null) return cached;
+        boolean val;
+        try {
+            val = playContextRaw(v);
+        } catch (Throwable t) {
+            val = false;
+        }
+        PC_BOOL.put(anchor, val);
+        return val;
+    }
+
+    /** {@link #playContext} 的帧窗口时间戳。 */
+    private static volatile long sPcAt;
+
+    /** 帧内 memo：View → 页面锚点（每帧清空）。 */
+    private static final java.util.Map<View, View> PC_ANCHOR =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<View, View>());
+
+    /** 帧内 memo：页面锚点 → 这一页是不是播放页（每帧清空）。 */
+    private static final java.util.Map<View, Boolean> PC_BOOL =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<View, Boolean>());
+
+    private static View anchorCached(View v) {
+        if (v == null) return null;
+        View a = PC_ANCHOR.get(v);
+        if (a != null) return a;
+        try {
+            a = pageAnchorOf(v);
+        } catch (Throwable t) {
+            a = null;
+        }
+        PC_ANCHOR.put(v, a == null ? v : a);
+        return a == null ? v : a;
+    }
+
+    private static boolean playContextRaw(View v) {
         if (isPlayLive(v)) return true;
         // ★★★ v0.1.43（r14 用户第 5 / 6 / 7 条）：**删掉「height > 屏高 ⇒ 播放页」**。
         //   r14 日志：`blur bg r=0 1440x3328 pg=1 ->play` —— 列表/详情页的底图也比
@@ -4579,6 +6779,42 @@ public final class BgPeel {
         //   证明宿主根本不用 BottomSheet 那套类名。
         //   （@gorhom 的浮层万一被渲染在页面树里，`insideBottomSheet` 仍然放行。）
         if (!inFloatingLayer(v)) return false;
+        // ★★★ v0.1.72（r74 第 2 条）：**播放页的主体容器不是面板，绝不涂玻璃**。
+        //
+        //   r74 现场（就是用户说的「封面上下那两条错位硬边，闪一下就恢复」）：
+        //   第一次打开播放页那一瞬，封面容器 `/3/0/2/2/0 ReactViewGroup [0,284,1272,1238]`
+        //   被判成玻璃（probe 里 `bg=CompositeBackgroundDrawable P=glassA`），
+        //   于是它被铺成 <b>壁纸 + 38% 模糊</b>；而同一屏其它层铺的是 {@code playBmp}
+        //   （{@code f2PlayBlur} 默认 0 ⇒ 清晰壁纸）。两块差了一整档模糊度，
+        //   肉眼就是「封面上面一条、下面一条硬边」；落位后它重新被判成
+        //   「叶子层 → drop」，硬边自己消失 —— 所以是"闪一下"。
+        //   判据：播放页语境 + 满宽 + 高 ≥20% 屏 + 顶边在屏幕上半部 ⇒ 这是页面主体。
+        //   （播放页里真正的面板都是底部弹层，顶边在下半部，不会被误伤。）
+        // ★★★ v0.1.80（r83 第 3 条「偶发：背景变成封面的模糊版 + 封面不显示」）：
+        //   **判据从 `playContext` 换成结构判据 `inPlayTree(v)`。**
+        //   `playContext` 依赖活体进度条，在「首次打开 / 退后台回来」的那几帧会失效；
+        //   一旦失效，这一段排除就不生效 ⇒ 封面容器被当成玻璃面板铺上
+        //   「壁纸 + 38% 模糊」（背景看起来像封面的模糊放大版），
+        //   而封面自己那一层的绘制被玻璃逻辑接管掉（封面不显示）。
+        //   用户 r83 第 3 条的两张截图正是这一前一后。
+        //   `inPlayTree` 走「祖先链里有没有满屏氛围底图」这条纯结构事实，
+        //   不依赖进度条 ⇒ 那几帧也成立。
+        if (inPlayTree(v)) {
+            if (w * 100 >= (long) sSW * 92 && h * 100 >= (long) sSH * 20) {
+                int[] gl = new int[2];
+                try {
+                    v.getLocationOnScreen(gl);
+                    GlassPaint.stableScreenLoc(v, gl, sSW, sSH);
+                } catch (Throwable ignored) {
+                    gl[0] = 0;
+                    gl[1] = 0;
+                }
+                if (gl[1] * 100 < (long) sSH * 55) {
+                    noteGlassFail("play main " + gl[1]);
+                    return false;
+                }
+            }
+        }
         // ★★★ v0.1.39：**只靠 {@link #mainWindowSheet} 命中时要更高**。
         //   Dialog 窗口里的块已经被 r42 日志反复确认过属性，
         //   但「主窗口 + 不在 Screen 里 + 贴底」这条是本轮新开的，万一宿主在
@@ -4807,6 +7043,403 @@ public final class BgPeel {
         }
     }
 
+    /** 播放页根上「对象级底图」的账：View → 当前挂着的位图（v0.1.72）。 */
+    private static final java.util.Map<View, Bitmap> ROOT_BG =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<View, Bitmap>());
+
+    /** 「换播放页根背景」是否正在进行中（防止 draw 里 setBackground 导致重入）。 */
+    private static volatile boolean sRootBgBusy;
+
+    /** ★ v0.1.73：当前挂着「对象级底图」的播放页根（内层满屏底图据此 drop）。 */
+    private static volatile View sPlayRootBgView;
+
+    /** ★ v0.1.73：那个根上挂的是哪张位图（换壁纸后才需要重设）。 */
+    private static volatile Bitmap sPlayRootBgBmp;
+
+    /** ★ v0.1.73：「补挂根底板」的上次时刻（1 秒限流）。 */
+    private static volatile long sRootBgAt;
+
+    /**
+     * ★★★ v0.1.73（r76 第 1 条）：这一层是不是**播放页根底板那棵子树**里的。
+     *
+     * <p>为什么不能用 {@link #playContext}：回前台 / 切后台会让 RN 重建视图树，
+     * {@code sPlaySeek} 的「同页」判定很容易失配 ⇒ playContext 变 false ⇒
+     * 内层满屏底图掉回清晰档。而「根底板挂在哪个 View 上」是对象级事实，
+     * 宿主重建时 {@link #ensurePlayRootBg} 会重新挂一次并更新引用，天然跟着走。
+     */
+    /** {@link #hasFullBackdropChild} 的单条缓存（同一层 300ms 内复用）。 */
+    private static volatile View sFbView;
+    private static volatile boolean sFbVal;
+    private static volatile long sFbAt;
+
+    /**
+     * ★★★ v0.1.80（r83 第 3 条）：这一层是不是**在播放页那棵树里**（可以是它的任意子孙）。
+     *
+     * <p>与 {@link #isPlayRoot} 的区别：那个只认「播放页根」，这个认「根 + 所有子孙」。
+     * 用在「这一块封面 / 这张图要不要被当成玻璃面板」这类判断上。
+     *
+     * <p>核心是最后那条**纯结构**判据：沿祖先链找「谁的子树里挂着满屏氛围底图」。
+     * 它不依赖进度条，所以「首次打开 / 退后台回来」那几帧也成立 ——
+     * 正是那几帧里 `playContext` 失效，才导致封面被涂成玻璃、背景变成模糊版。
+     */
+    private static boolean inPlayTree(View v) {
+        if (v == null) return false;
+        // ★★★ v0.1.83（r86 第 4 条）：同样改成 O(深度)。
+        //   上一版这里沿祖先链每层调一次 `hasFullBackdropChild`（遍历子树），
+        //   而调用点是「每个 View 的每一帧 draw」—— 这是「打开作品页就卡」的主因。
+        View r = sPlayRootRef == null ? null : sPlayRootRef.get();
+        if (r != null) {
+            try {
+                View cur = v;
+                for (int i = 0; i < 14 && cur != null; i++) {
+                    if (cur == r) return true;
+                    android.view.ViewParent p = cur.getParent();
+                    cur = p instanceof View ? (View) p : null;
+                }
+            } catch (Throwable ignored) {
+            }
+            return false;
+        }
+        if (playContext(v) || isPlayWindow(v) || underPlayRoot(v) || wasPaintedAsPlay(v)) {
+            return true;
+        }
+        try {
+            View cur = v;
+            for (int i = 0; i < 10 && cur != null; i++) {
+                if (hasFullBackdropChild(cur)) return true;
+                android.view.ViewParent p = cur.getParent();
+                cur = p instanceof View ? (View) p : null;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * ★★★ v0.1.79（r82）：这一层是不是**播放页根**（新架构下唯一要挂底板的那一层）。
+     *
+     * <p>四条判据按可靠度排序，任一成立即可：
+     * <ol>
+     *   <li>{@code v == sPlayRootBgView} —— 已经挂过底板的那个 View（最硬）；</li>
+     *   <li>{@code containsPlaySeek(v)} —— 子树里装着活着的进度条；</li>
+     *   <li>{@code hasFullBackdropChild(v)} —— 子树里有满屏氛围底图（纯结构，
+     *       不依赖进度条，「退后台再回来」也成立）；</li>
+     *   <li>{@code wasPaintedAsPlay(v)} —— 历史上被 {@code paint play…} 画过。</li>
+     * </ol>
+     * 信息卡 / 普通 Dialog 这四条都不满足 ⇒ 仍然走 drop，不会盖住宿主页面。
+     */
+    private static boolean isPlayRoot(View v) {
+        if (v == null) return false;
+        // ★★★ v0.1.83（r86 第 4 条「打开作品页 + 底栏切换又卡了」）：
+        //   **热路径只做 O(深度) 的引用比较，绝不再遍历子树。**
+        //   上一版这里挂 `hasSeekShape` / `hasFullBackdropChild`，两个都是 O(子树)，
+        //   而「每一层每一帧」都要问一次 ⇒ 打开作品页、切底栏时直接卡住。
+        //   现在「播放页根是哪个」由心跳（500ms）算一次并记进 {@link #sPlayRootRef}，
+        //   绘制路径只比较引用 / 走父链（≤12 次 getParent）。
+        View r = sPlayRootRef == null ? null : sPlayRootRef.get();
+        if (r != null) {
+            return v == r || underPlayRoot(v) || wasPaintedAsPlay(v);
+        }
+        // 兜底：心跳还没扫到根（刚启动 / 首次打开的头一两百毫秒）时才允许重判。
+        if (v == livePlayRoot()) return true;          // v0.1.80：只认「还挂在树里」的那一个
+        if (containsPlaySeek(v)) return true;
+        if (hasSeekShape(v)) return true;
+        if (hasFullBackdropChild(v)) return true;
+        return wasPaintedAsPlay(v);
+    }
+
+    /** {@link #hasSeekShape} 的 300ms 缓存。 */
+    private static volatile View sSkView;
+    private static volatile boolean sSkVal;
+    private static volatile long sSkAt;
+
+    /** ★ v0.1.83：心跳维护的「播放页根」（绘制路径只读它，不再自己遍历）。 */
+    private static volatile java.lang.ref.WeakReference<View> sPlayRootRef;
+
+    /** 「找播放页根」的上次时刻（500ms 限流）。 */
+    private static volatile long sRootScanAt;
+
+    /**
+     * ★★★ v0.1.83（r86 第 4 条）：**心跳里算一次「播放页根是谁」，绘制路径只读结果。**
+     *
+     * <p>为什么必须这么改：判断播放页根需要「子树里有没有进度条形状 / 满屏氛围底图」，
+     * 两个都是 O(子树)。而绘制路径是「每一层每一帧」都要问一次 ——
+     * r85 把这两条挂进去之后，打开作品页、切底栏就卡住了（用户 r86 第 4 条）。
+     *
+     * <p>现在：500ms 扫一次（从窗口根往下找「满屏 + 子树里有进度条形状」的第一层），
+     * 记住它；绘制路径只做引用比较和父链比较。
+     */
+    private static void refreshPlayRoot() {
+        try {
+            View root = sLastRoot == null ? null : sLastRoot.get();
+            if (root == null) return;
+            long now = System.currentTimeMillis();
+            if (now - sRootScanAt < 500L) return;
+            sRootScanAt = now;
+            View found = findPlayRoot(root, 0);
+            if (found != null) sPlayRootRef = new java.lang.ref.WeakReference<>(found);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static View findPlayRoot(View v, int depth) {
+        if (v == null || depth > 12) return null;
+        try {
+            if (v.isShown()) {
+                int w = v.getWidth();
+                int h = v.getHeight();
+                boolean full = sSW > 0 && sSH > 0
+                        && w * 100 >= (long) sSW * 85 && h * 100 >= (long) sSH * 85;
+                if (full && scanSeekShape(v, 0)) return v;
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n && i < 8; i++) {
+                View r = findPlayRoot(g.getChildAt(i), depth + 1);
+                if (r != null) return r;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * ★★★ v0.1.82：这层的子树里有没有「进度条形状」的 View。
+     *
+     * <p>与 {@link #containsPlaySeek} 的区别：那个要求进度条已经被记账，这个只看形状，
+     * 所以**首次打开的头几帧也成立**。深度限 8、每层最多看 12 个子，300ms 缓存。
+     */
+    private static boolean hasSeekShape(View v) {
+        if (v == null || sSW <= 0 || sSH <= 0) return false;
+        long now = System.currentTimeMillis();
+        if (v == sSkView && now - sSkAt < 300L) return sSkVal;
+        boolean val;
+        try {
+            val = scanSeekShape(v, 0);
+        } catch (Throwable t) {
+            val = false;
+        }
+        sSkView = v;
+        sSkVal = val;
+        sSkAt = now;
+        return val;
+    }
+
+    private static boolean scanSeekShape(View v, int depth) {
+        if (v == null || depth > 8) return false;
+        try {
+            if (v.isShown() && !(v instanceof android.widget.TextView)) {
+                int w = v.getWidth();
+                int h = v.getHeight();
+                if (w > 0 && h > 0
+                        && w * 100 >= (long) sSW * 40
+                        && h * 100 >= (long) sSH * 2
+                        && h * 100 <= (long) sSH * 9) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n && i < 12; i++) {
+                if (scanSeekShape(g.getChildAt(i), depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * ★★★ v0.1.78（r81 第 1 / 2 条）：这一层的子树里有没有「满屏氛围底图」。
+     *
+     * <p>为什么要这条：播放页的识别原来全靠 {@code sPlaySeek}，而它在
+     * 「退后台 → 回前台 → 再展开」这条路上会 detach ⇒ 所有基于它的判据一起失效
+     * ⇒ 播放页根一直 drop ⇒ 持续透明。
+     *
+     * <p>而播放页有一个**纯结构**特征：根的直接子树里挂着两张
+     * 「1272×2772 / 1272×2913」的氛围底图（{@code ExpoImageView}）。
+     * 信息卡、普通 Dialog 的满屏底都是 {@code ReactViewGroup} 而不是 ImageView，
+     * 所以这条不会误伤「信息卡背后宿主页面」那条修复。
+     */
+    private static boolean hasFullBackdropChild(View v) {
+        if (v == null || sSW <= 0 || sSH <= 0) return false;
+        long now = System.currentTimeMillis();
+        if (v == sFbView && now - sFbAt < 300L) return sFbVal;
+        boolean val;
+        try {
+            val = scanFullBackdrop(v, 0);
+        } catch (Throwable t) {
+            val = false;
+        }
+        sFbView = v;
+        sFbVal = val;
+        sFbAt = now;
+        return val;
+    }
+
+    private static boolean scanFullBackdrop(View v, int depth) {
+        if (v == null || depth > 5) return false;
+        if (v instanceof android.widget.ImageView) {
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w * 100 >= (long) sSW * 95 && h * 100 >= (long) sSH * 90) return true;
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n && i < 12; i++) {
+                if (scanFullBackdrop(g.getChildAt(i), depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * ★★★ v0.1.80（r104）：<b>播放页根一旦被摘下窗口就作废。</b>
+     *
+     * <p>`sPlayRootBgView` 是对象级记忆（只有 restoreAll 才清），而播放页会进出栈；
+     * 旧的根对象虽然已经不在了，但 {@code isPlayRoot/underPlayRoot} 仍会拿它去比 ——
+     * 「这一页是播放页」的结论就被一个死对象续着，主页/列表页偶尔吃到播放档底图。
+     * 这里做一次 O(1) 的存活检查，死引用就地清掉。
+     */
+    private static View livePlayRoot() {
+        View r = sPlayRootBgView;
+        if (r == null) return null;
+        try {
+            if (r.getParent() == null) {
+                sPlayRootBgView = null;
+                sPlayRootBgBmp = null;
+                sPlayRootRef = null;
+                return null;
+            }
+        } catch (Throwable ignored) {
+        }
+        return r;
+    }
+
+    private static boolean underPlayRoot(View v) {
+        View root = livePlayRoot();
+        if (root == null || v == null || v == root) return false;
+        try {
+            View cur = v;
+            for (int i = 0; i < 28 && cur != null; i++) {
+                if (cur == root) return true;
+                android.view.ViewParent p = cur.getParent();
+                cur = p instanceof View ? (View) p : null;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /**
+     * ★★★ v0.1.73（r76 第 1 条，最终判据）：这一层**曾经被认成播放页底**。
+     *
+     * <p>为什么还需要这一条：回前台 / 切后台会让 RN 重建视图树，
+     * `sPlaySeek` 指向的旧进度条 detach ⇒ `isShown()` false ⇒ 心跳不再刷新
+     * `sPlayOnScreenAt`；`underPlayRoot` 也失效（根换了对象）。
+     * 三条判据同时掉，档位就退回清晰壁纸 —— 这正是用户说的「回前台后背景不模糊了」。
+     *
+     * <p>而 {@link #PAINTER} 里记的「这一层上一次是被谁接管的」是<b>对象级记忆</b>，
+     * 重建时同一个 View 不会被复用成别的页面（RN 的播放页根是独立 View，离开即销毁），
+     * 所以「曾经是 paint play…」可以安全地当作「现在还是播放页」。
+     */
+    private static boolean wasPaintedAsPlay(View v) {
+        if (v == null) return false;
+        try {
+            String p = PAINTER.get(v);
+            if (p == null || !p.startsWith("paint play")) return false;
+            // ★★★ v0.1.80（r104 用户第 4 条）：**「曾经是播放页」必须和「哪一页」一起记。**
+            //   PAINTER 是对象级记忆、没有过期时间；而「窗口是播放页」这个判据
+            //   之前在离开播放页后还会持续 2.5 秒 ⇒ 主界面的层会在这段时间里被写进
+            //   `paint play…`，然后**永远**保持播放档 ⇒ 主页时不时残留一层模糊。
+            //   现在额外记下「画它的时候它在哪一页」，换页即失效。
+            java.lang.ref.WeakReference<View> ref = PLAY_PAINT_PAGE.get(v);
+            View painted = ref == null ? null : ref.get();
+            if (painted == null) return true;      // 老记录（没有页信息）⇒ 保持旧行为
+            return samePage(painted, v);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 「这一层上一次被 paint play 画过时，坐在哪一页」（v0.1.80）。 */
+    private static final java.util.Map<View, java.lang.ref.WeakReference<View>> PLAY_PAINT_PAGE =
+            java.util.Collections.synchronizedMap(
+                    new java.util.WeakHashMap<View, java.lang.ref.WeakReference<View>>());
+
+    /** 复用的临时矩形（避免每帧 new Rect）。 */
+    private static final ThreadLocal<Rect> CLIP0 = new ThreadLocal<Rect>() {
+        @Override
+        protected Rect initialValue() {
+            return new Rect();
+        }
+    };
+
+    /**
+     * ★★★ v0.1.72（r74 第 3 条，五稿）：<b>把播放页的底图挂成这一层的 background。</b>
+     *
+     * <h3>为什么 canvas 绘制救不了「透明」</h3>
+     * 我们在 {@code View#draw} 里画壁纸，这笔指令被录进该层自己的 <b>RenderNode</b>。
+     * 宿主切后台会销毁 Surface，回来时只要这一层的 RenderNode <b>没被重新录制</b>，
+     * 屏幕上就没有任何壁纸（r74 实测：`draw seen=8 wall=0 play=0`，底图那几层根本没画）。
+     * 而旧 RenderNode 里存的又正好是「我们 return true 跳过宿主绘制」的结果 ⇒ 整层空白。
+     *
+     * <h3>为什么 background 能救</h3>
+     * {@code View#setBackground} 是<b>对象级状态</b>，不是一次性绘制指令：
+     * 下一帧无论是新录还是复用，{@code View#draw} 都会先把 background 画出来。
+     * 于是「壁纸」从「每帧有没有来得及画」变成「这层有没有挂壁纸」——
+     * 后者只在换壁纸时才变，与转场 / 切后台完全无关。
+     *
+     * <h3>为什么不会像 r38 那样把主界面糊掉</h3>
+     * 只对 {@code inFloatingLayer} 里<b>满屏的播放页根</b>动手（调用点已经筛过），
+     * 从不碰 DecorView / 窗口根 / 列表页。
+     *
+     * <p>设置动作 post 到主线程并带忙碌闸：在 {@code draw} 调用栈里直接 setBackground
+     * 会触发 requestLayout，容易变成重入循环。
+     */
+    private static void ensurePlayRootBg(final View v, final Bitmap bmp) {
+        try {
+            if (v == null || bmp == null || bmp.isRecycled()) return;
+            // ★★★ v0.1.73（r76 第 3 条）：**判重只看账本，不再和宿主拉锯。**
+            //   宿主（ReactViewGroup）每次 props 更新都会重设自己的背景，
+            //   若我们每次都「发现被改回去了再设一遍」，转场里就是
+            //   setBackground ↔ 宿主 setBackground 反复打架 —— 每次都要
+            //   invalidate 整层，这就是底部标签栏切换卡顿的一份。
+            //   现在每个 View 只设一次：设上了是赚到（对象级底板防透明），
+            //   被宿主盖掉也无所谓 —— 底图仍然由 {@code paint play screen bg}
+            //   那条 canvas 路径提供，而且那一条已经保证铺满整层（含顶部 18px）。
+            if (ROOT_BG.get(v) == bmp) return;
+            if (sRootBgBusy) return;
+            sRootBgBusy = true;
+            MAIN.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (bmp.isRecycled() || v.getParent() == null) return;
+                        v.setBackground(new io.github.ariinyume.morimod.view.CoverDrawable(bmp, 0));
+                        ROOT_BG.put(v, bmp);
+                        sPlayRootBgView = v;
+                        sPlayRootBgBmp = bmp;
+                        if (sRedoLogs < 12) {
+                            sRedoLogs++;
+                            log("play root bg -> " + name(v) + " "
+                                    + v.getWidth() + "x" + v.getHeight());
+                        }
+                    } catch (Throwable ignored) {
+                    } finally {
+                        sRootBgBusy = false;
+                    }
+                }
+            });
+        } catch (Throwable ignored) {
+            sRootBgBusy = false;
+        }
+    }
+
     /**
      * 某个 drawable 背景要不要「换成壁纸」。
      *
@@ -4815,9 +7448,36 @@ public final class BgPeel {
      *
      * @return true = 壁纸已经画在这块底色的位置上，调用方不要再画宿主原来的颜色
      */
+    /**
+     * ★★★ v0.1.74（r88）：这一层该用哪一档壁纸 —— <b>播放页里一律播放档</b>。
+     *
+     * <p>背景：同一个屏幕上「播放档（壁纸+f2PlayBlur）」与「清晰壁纸」混用，
+     * 只要有一层走错档，就会在画面里留下一块<b>清晰度不同</b>的矩形 ——
+     * 用户 r88 第 1 条说的「色块只闪现在作品封面上方」就是清晰档画进了播放页。
+     *
+     * <p>判据按可靠度：`playContext`（活体进度条）→ `isPlayWindow`（窗口级）→
+     * `inPlayTree`（纯结构：祖先链里有满屏氛围底图，头几帧/重建后依然成立）。
+     * 三条都不成立才回落到清晰壁纸，所以列表页 / 作品页不受影响。
+     */
+    private static Bitmap pageBmp(View v) {
+        try {
+            if (v != null && (playContext(v) || isPlayWindow(v) || inPlayTree(v))) {
+                Bitmap pb = playBmp();
+                if (pb != null) return pb;
+            }
+        } catch (Throwable ignored) {
+        }
+        return sWpBmp != null ? sWpBmp : sWpBarBmp;
+    }
+
     private static boolean paintWallpaper(Drawable d, Canvas c, boolean requireOpaque) {
         if (!sArmed) return false;
         if (sSW <= 0 || sSH <= 0) return false;
+        // ★★★ v0.1.73：这一层的背景**已经是我们自己的底图**（{@link
+        // io.github.ariinyume.morimod.view.CoverDrawable}，由 ensurePlayRootBg 挂上）⇒
+        //   直接放行，让它自己画一次。否则「background 画一遍 + 这里 canvas 再画一遍」
+        //   会叠出两层对齐基准不同的壁纸 —— 那正是用户 r75 看到的「背景位移 + 色块」。
+        if (d instanceof io.github.ariinyume.morimod.view.CoverDrawable) return false;
         // 面板分支会「再调一次自己的 draw 把半透明底叠回来」，重入时必须直接放行，
         // 否则就是无限递归。
         if (Boolean.TRUE.equals(REENTRY.get())) return false;
@@ -4825,6 +7485,22 @@ public final class BgPeel {
         try {
             View v = ownerView(d);
             if (v == null) return false;
+            // ★★★ v0.1.87（r100）：**每次绘制都问一次「页面容器愿不愿意别卸页」**（只跑一次）。
+            //   放在这里而不是看门狗里：这条绘制路径每帧都在走，必定命中，
+            //   不受「2 秒闸/额度」影响（r98/r99 那条一次都没执行就是这个原因）。
+            try {
+                if (!sAttachTried) tryDetachOff(v);
+            } catch (Throwable ignored) {
+            }
+            // ★ v0.1.75：记住窗口根 —— 心跳里「主动扫进度条」需要一棵树去扫，
+            //   而那时可能还没有活体进度条（正是要解决的场景）。引用失效会自动重建。
+            try {
+                java.lang.ref.WeakReference<View> lr = sLastRoot;
+                if (lr == null || lr.get() == null) {
+                    sLastRoot = new java.lang.ref.WeakReference<>(v.getRootView());
+                }
+            } catch (Throwable ignored) {
+            }
             Rect b = d.getBounds();
             if (b == null || b.isEmpty()) return false;
             noteBigSurface(v, d, b);
@@ -4869,7 +7545,7 @@ public final class BgPeel {
             }
 
             if (coversScreen(v)) {
-                Bitmap bmp = sWpBmp;
+                Bitmap bmp = pageBmp(v);
                 if (bmp == null) return false;
                 // 半透明的一律放过：弹窗遮罩（overlay/modal1 = #19122ccc）不能被顶掉
                 if (requireOpaque && d.getOpacity() != PixelFormat.OPAQUE) return false;
@@ -4881,7 +7557,85 @@ public final class BgPeel {
                 //   若这里把它的底删了，面板就整块透明（r15 第 2 条）。
                 //   上一帧已经给它铺过玻璃（{@link #GLASSED} 有账）⇒ 保留玻璃，
                 //   宁可多铺一层也不能留洞。
+                // ★★★ v0.1.71（r73）：**播放页这个满屏浮层不能「丢掉不画」**。
+                //   r73 现场：播放页根 `/3` 的底就是在这里被丢的（`P=drop screen float`），
+                //   全靠它下面那两张底图（1272x2772 / 1272x2913）撑着不透明。
+                //   而「迷你条往返 → 再展开」这条路上，那两张图会经历一次卸载/重建，
+                //   中间任何一帧没画出来，整页就直接透出后面那一页 —— 这正是用户反复
+                //   说的「播放页背景依旧透明」。这里改成<b>自己铺一张播放档壁纸</b>：
+                //   位图和下面两张底图完全同源同位置，肉眼无差，但从此不会再留洞。
+                // ★★★ v0.1.72（r74 第 3 条）：**判据补一条「刚铺过播放档底图」。**
+                //   r73 版只认 `playContext || isPlayWindow`，而这两条在
+                //   「收成迷你条 → 再展开」的那几帧里会**同时失效**：
+                //   迷你条状态下进度条被换成 1~2dp 的细线（{@link #notePlaySeek} 明确排掉），
+                //   播放页那一帧又刚好没重绘 ⇒ 这一次 `drop screen float` 照旧执行
+                //   ⇒ 满屏底又被丢掉 ⇒ 用户说「还是透明」。
+                //   现在追加「3 秒内刚铺过播放档底图」（{@link #sPlayPaintedAt}，
+                //   由每个播放页底图每帧刷新）作为短时信号；它只补洞、不换档：
+                //   刚离开播放页的窗口用<b>清晰壁纸</b>，绝不会把列表页糊掉。
                 if (inFloatingLayer(v) && !GLASSED.containsKey(v)) {
+                    // ★★★ v0.1.75（r78 第 6 条：「信息卡弹出后，背后宿主页面不显示」）：
+                    //   **判据收紧到「这一层自己就是播放页」，并彻底删掉两个时间窗口。**
+                    //
+                    //   上一版这里挂着 `playContext(v) || … || sPlayOnScreenAt < 800ms`
+                    //   和另一条 10 秒窗口。前者是「整个窗口里有一条活着的进度条」——
+                    //   迷你播放条存在时它对<b>任何页面</b>都成立；后者更宽。
+                    //   于是「信息卡（独立 Dialog）+ 满屏底」也命中 ⇒ 我们在那个
+                    //   <b>透明 Dialog 窗口</b>里铺了一张不透明壁纸 ⇒ 把主窗口的
+                    //   宿主页面整个盖掉（r13 用户第 8 条那一幕）。
+                    //
+                    //   现在只认对象级事实：这一层被 `paint play…` 画过，或它就在
+                    //   播放页根底板那棵子树里，或是播放窗口本身。信息卡三条都不满足 ⇒ drop。
+                    // ★★★ v0.1.77（r80 第 2 条的真凶，probe 实证）：
+                    //   `P=drop screen float` 一直挂在播放页根 `/3` 上 ——
+                    //   因为播放页<b>也跑在 Dialog 窗口里</b>（react-native-screens 的 modal），
+                    //   而我把 `playRecent` 的「Dialog 一律 drop」写成了硬规则 ⇒ 误伤播放页。
+                    //   现在补一条**结构判据**：这一层的子树里装着那条活着的进度条 ⇒ 它就是播放页根。
+                    //   信息卡里不可能有播放进度条 ⇒ 依然 drop，第 6/7 条不会被回退。
+                    // ★★★ v0.1.78（r81 第 2 条：「退后台再回来 → 再展开 → 持续透明」）：
+                    //   加了「后台往返」之后，`sPlaySeek` 指向的旧进度条 detach ⇒
+                    //   `containsPlaySeek` 也失效 ⇒ 四条判据全灭 ⇒ 一直 drop。
+                    //   补一条**纯结构**判据：这一层的直接子树里有没有「满宽 ≥95% +
+                    //   高 ≥90% 屏」的图片层 —— 播放页一定有两张满屏氛围底图，
+                    //   信息卡 / 普通 Dialog 的满屏底是 ViewGroup 而不是 ImageView，
+                    //   所以不会误伤第 6/7 条。
+                    // ★★★ v0.1.79（r82 架构重做）：**播放页只留一个绘制来源 = 对象级底板。**
+                    //   十几轮的结论：在 View#draw 里逐层画壁纸，永远有两个死结 ——
+                    //   ① 判据（活体进度条）在「退后台 / 树重建」时失效；
+                    //   ② 这笔绘制录在各自 RenderNode 里，宿主不重绘那一层就永远停在
+                    //      旧结果上（= 用户看到的透明 / 色块）。
+                    //   现在改成：播放页根挂一个 CoverDrawable（对象级，跟着 View 走），
+                    //   页面内所有满屏层一律 drop，canvas 这条路在播放页里彻底不画。
+                    //   ⇒ 只留一个来源：没有两套对齐基准（结构上不会有色块/位移）；
+                    //   ⇒ background 是对象状态：RenderNode 新建还是复用都会画（结构上不会透明）。
+                    if (isPlayRoot(v)) {
+                        Bitmap pb = playBmp();
+                        if (pb != null) {
+                            ensurePlayRootBg(v, pb);
+                            if (ROOT_BG.get(v) != pb) {
+                                // 底板还没挂上（异步 post 的那一两帧）：自己画一次当过渡。
+                                // 静态帧下 coverRect 与 CoverDrawable 的居中裁剪逐像素等价。
+                                // ★★★ v0.1.81（r84 第 1 条：「上半有色块、下半完全透明」）：
+                                //   **裁剪必须用「本层整块」，不能用 drawable 的 bounds。**
+                                //   播放页根这块 {@code CompositeBackgroundDrawable} 的 bounds
+                                //   只到「音轨标题栏上方」（用户截图红框就是这个范围），
+                                //   照着它裁 ⇒ 下半部分一像素都没铺 ⇒ 透出音轨列表。
+                                //   整层裁剪只影响这一层（它现在只有一个绘制来源），
+                                //   而顶部的压暗渐变是它的<b>子层</b>，画在它上面，不会被盖。
+                                Rect full0 = CLIP0.get();
+                                full0.set(0, 0, v.getWidth(), v.getHeight());
+                                if (full0.isEmpty()) full0.set(0, 0, sSW, sSH);
+                                if (paintAligned(c, pb, v, full0, false)) {
+                                    sPainted = true;
+                                    hit("paint play screen bg -> ", v, full0);
+                                    return true;
+                                }
+                            }
+                            sPainted = true;
+                            hit("drop play root bg -> ", v, b);
+                            return true;
+                        }
+                    }
                     sScrim++;
                     sPainted = true;
                     hit("drop screen float -> ", v, b);
@@ -4896,8 +7650,19 @@ public final class BgPeel {
             // ★ 全宽的渐变 drawable（RN backgroundImage: linear-gradient）
             //   ★★ v0.1.20：按透明度分开处理 —— 「替不透明像素是等价操作，涂半透明是凭空加遮挡」。
             if (!requireOpaque && isFullWidth(v)) {
+                // ★★★ v0.1.74（r88 第 1 条的真凶）：**播放页子树里的满宽渐变一律放行。**
+                //   现场（r88 用户录屏 f040，逐块拉普拉斯方差实测）：
+                //   播放页刚打开的头几百毫秒，作品封面那块 1272×954 的位置上是一块
+                //   <b>清晰壁纸</b>（lapvar 1066，而 1 秒后同一位置的糊封面只有 4.7）。
+                //   它就是从这一支画出去的：封面的容器是一个「满宽 + 不透明渐变底」的层，
+                //   而头几帧播放页那个 Dialog 窗口还没被 `inFloatingLayer` 认出来
+                //   ⇒ 掉进下面这条 `paint grad bg`（用的是<b>清晰壁纸</b> sWpBmp）
+                //   ⇒ 封面位置出现一块清晰色块，1~2 秒后窗口认出来了、宿主又把封面画上，
+                //   色块自己消失 —— 与用户描述「上下铺满、只有封面上方闪一块、1~2 秒恢复」一致。
+                //   放行的代价是零：这一层是内容容器的底，宿主本来就会画它自己的底色。
+                if (inPlayTree(v)) return false;
                 if (d.getOpacity() == PixelFormat.OPAQUE) {
-                    Bitmap bmp = sWpBmp;
+                    Bitmap bmp = pageBmp(v);
                     if (bmp == null) return false;
                     // ★★★ v0.1.42（r13 用户第 8 条）：浮层里的满宽渐变同样不画。
                     if (inFloatingLayer(v)) {
@@ -5041,6 +7806,11 @@ public final class BgPeel {
                 //   播放页到底是不是这条路画的。
                 if (isImageLayer(v)) {
                     if (w >= sFullW && h >= (int) (sSH * VEIL_MIN_H_RATIO)) noteImage(v, w, h);
+                    // ★★★ v0.1.77（r80 第 4 / 5 条）：**内容图放行，不进 atmos / fallback。**
+                    //   `paintAtmos` / `paintPlayFallback` 都会把这层换成壁纸（return true 不画原图）——
+                    //   对「氛围底图」是对的，对「用户点开的那张图 / 概述里的插图」就是「图不显示」。
+                    //   两者靠 imgKind 分：底色是 ATMOS/BLUR，内容图是 CONTENT。
+                    if (imgKind(v) == IMG_CONTENT) return false;
                     // ★★★ v0.1.41：弹层玻璃**只留在 {@code ExpoImageView#draw} 那条钩子里**
                     //   （那里才有 chain，才能把宿主那张紫图按低透明度叠回来）。
                     //   这里如果再处理一次，就是「同一块图被两条路各画一遍」——
@@ -5096,8 +7866,14 @@ public final class BgPeel {
                 //   模糊图本来就看不出接缝，缩放几个像素完全自然。
                 //   ★ v0.1.27：门槛用 ZOOM_BLUR_MIN（8%）而不是 2% —— 翻图片、
                 //   轻微回弹这些「2% 级」的缩放不该把整屏换成毛玻璃。
+                // ★★★ v0.1.72（r74）：**档位改成和邻居一致，不再强行用它家毛玻璃**。
+                //   错位本身已经在 {@link #paintAligned} 里按 scale 补偿掉了，
+                //   唯一还会暴露问题的就是「同一屏里这一层是糊图、旁边几层是清晰壁纸」
+                //   —— 那本身就是一条硬边。播放页统一用播放档，其余统一用清晰壁纸。
                 if (Math.abs(treeScale(v) - 1f) > ZOOM_BLUR_MIN) {
-                    Bitmap zoomBmp = sWpBarBmp;
+                    boolean playZoom = playContext(v) || isPlayWindow(v);
+                    Bitmap zoomBmp = playZoom ? playBmp() : sWpBmp;
+                    if (zoomBmp == null) zoomBmp = sWpBarBmp;
                     if (zoomBmp == null) return false;
                     if (!paintAligned(c, zoomBmp, v, r, false)) return false;
                     sZoom++;
@@ -5144,7 +7920,8 @@ public final class BgPeel {
                     return true;
                 }
 
-                Bitmap bmp = sWpBmp != null ? sWpBmp : sWpBarBmp;
+                Bitmap bmp = pageBmp(v);
+                if (bmp == null) bmp = sWpBarBmp;
                 if (bmp == null) return false;
                 // ★★★ v0.1.42（r13 用户第 8 条）：**浮层里的整屏叶子绝不铺壁纸**。
                 //   浮层都跑在独立 Dialog 窗口里，那个窗口是<b>透明</b>的 ——
@@ -5308,13 +8085,53 @@ public final class BgPeel {
     //   页面一离开就会自然过期，不会再污染其它页面。
     private static final long PLAY_WIN_TTL_MS = 2500L;
 
+    /**
+     * ★★★ v0.1.80（r104 用户第 2 / 4 条）：**「这是播放页窗口」必须带上「哪一页」。**
+     *
+     * <p>r61 起 {@code isPlayWindow} 只看「窗口根 + 2.5 秒」—— 而这个宿主的
+     * 主界面、媒体库、作品夹、播放页<b>全都在同一个窗口根里</b>（react-native-screens
+     * 的页面是同一个 DecorView 下的兄弟 View）。于是：
+     * <pre>
+     * 离开播放页后的 2.5 秒里，主界面的每一层都会被判成「播放页」
+     *   ⇒ 铺成播放档（壁纸 + f2PlayBlur 的模糊）= 用户第 4 条「主页叠加播放页的模糊效果」；
+     * 反过来进播放页时如果标记是从别的页续上的
+     *   ⇒ 播放页的整屏底图被当「非播放页」放回宿主 = 用户第 2 条「背景是模糊版作品封面」。
+     * </pre>
+     * 现在标记里同时记下「这一页的 Screen 容器」：只有同一页（或根本不在任何 Screen 里，
+     * 即那个宿主的根级播放层）才算播放页窗口。
+     */
+    private static volatile java.lang.ref.WeakReference<View> sPlayWinPage;
+
     /** 记下「这个窗口是播放页」——{@code setBlurRadius(10)} 只会出现在播放页。 */
     private static void markPlayWindow(View v) {
         try {
+            // ★★★ v0.1.81（r105 用户第 1 / 4 条）：**只有真的画在屏幕上才算数。**
+            //
+            //   用户这一轮的现象：停在作品文件夹里退回后台、再回前台，
+            //   自定义背景直接变成「播放页那档模糊」；其中一次甚至停在主页回前台也中招。
+            //
+            //   机制：退回后台时，播放页那几屏只是被 rns 挪走/停画，<b>并没有卸载</b>；
+            //   回前台重建的那几帧里它们仍在树里、仍会走 draw ⇒ 仍然触发
+            //   {@code setBlurRadius(10)} ⇒ {@link #markPlayWindow} 把「播放页窗口」重新点亮，
+            //   而当前真正可见的那一页里，贴在<b>根级</b>（不属于任何 Screen）的大层
+            //   会因为 {@code screenOf()==null} 被判成「播放页的根级层」（见 isPlayWindow）
+            //   ⇒ 整页被铺成播放档（壁纸 + 播放模糊）。
+            //
+            //   挡住它的唯一低成本判据就是「这一层此刻是否真的在屏幕上」：
+            //   离屏页（被平移出去 / 尺寸为 0 / 完全被裁掉）一律不点亮播放页标记。
+            // ★ r107：r105 的 onScreenNow 闸已撤回（同属上一轮，且会让播放页标记失忆）
             View root = v.getRootView();
             boolean first = false;
             if (root != null) {
                 first = PLAY_WIN.put(root, System.currentTimeMillis()) == null;
+                // ★ v0.1.80：标记的「页」只在能确定是某一页 Screen 时才记；
+                //   根级层（没有 Screen）不覆盖已有记录 —— 否则播放页里那些
+                //   inScr=0 的层会把标记冲成「无页」，隔离立刻失效。
+                try {
+                    View pg = screenOf(v);
+                    if (pg != null) sPlayWinPage = new java.lang.ref.WeakReference<>(pg);
+                } catch (Throwable ignored) {
+                }
                 // ★★★ v0.1.47（r47 用户第 3 条）：**第一次认定播放页时整棵树重画一遍**。
                 //
                 //   播放页是淡入进场的：第一帧进度条还没活、Screen 绑定还没形成，
@@ -5341,13 +8158,104 @@ public final class BgPeel {
         }
     }
 
-    /** 这个窗口是不是播放页窗口（v0.1.30）。 */
+    /** 这个窗口是不是播放页窗口（v0.1.30；v0.1.80 起带上页面归属，见 {@link #sPlayWinPage}）。 */
     private static boolean isPlayWindow(View v) {
         try {
             View root = v.getRootView();
             if (root == null) return false;
             Long t = PLAY_WIN.get(root);
-            return t != null && System.currentTimeMillis() - t < PLAY_WIN_TTL_MS;
+            if (t == null || System.currentTimeMillis() - t >= PLAY_WIN_TTL_MS) return false;
+            // ★ v0.1.80：同一窗口里有多个页面 —— 只认「标记时所在的那一页」。
+            java.lang.ref.WeakReference<View> ref = sPlayWinPage;
+            View marked = ref == null ? null : ref.get();
+            if (marked == null) return true;             // 没记到页 ⇒ 保持旧行为
+            View pg = screenOf(v);
+            if (pg == null) return true;                 // 根级层（该宿主的播放页就摊在根上）
+            return pg == marked;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 这一层此刻是否真的落在屏幕矩形里（v0.1.81）。
+     *
+     * <p>判据刻意宽松（只要沾到屏幕就算），只用来剔除
+     * 「被平移出屏幕的离屏页 / 尺寸为 0 / alpha=0」这几种死情况。
+     */
+    private static boolean onScreenNow(View v) {
+        try {
+            if (v == null || !v.isShown() || v.getAlpha() < 0.05f) return false;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w <= 0 || h <= 0) return false;
+            int[] loc = LOC.get();
+            v.getLocationOnScreen(loc);
+            int x = loc[0];
+            int y = loc[1];
+            return x + w > 0 && y + h > 0 && x < sSW && y < sSH;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 把「播放页」相关的全部账目作废（v0.1.81）。
+     *
+     * <p>后台/前台是天然的确定性边界：后台里没有任何一帧会被画出来，
+     * 所以从这里开始把上一轮记的播放页痕迹全部丢掉，回前台后让每一页按<b>当时</b>
+     * 的事实重新认一次。{@code PLAY_PAINT_PAGE}（「这层曾经被画成播放档」）
+     * 必须一起清 —— 它是对象级记忆、本来永不过期，一旦误判就一直是糊的。
+     */
+    private static void forgetPlayState() {
+        try {
+            PLAY_WIN.clear();
+            PLAY_PAINT_PAGE.clear();
+            PLAY_BG.clear();
+            sPlayWinPage = null;
+            sPlayScreen = null;
+            sSeekPageAnchor = null;
+            sPlayHoldUntil = 0L;
+            sPlayHoldPage = null;
+            sPlayPaintedAt = 0L;
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ v0.1.88（r112 用户第 2 条）：作品封面屏蔽
+    // ══════════════════════════════════════════════════════════════════
+
+    /**
+     * 这一层是不是「作品封面」，且当前开着「作品封面屏蔽」。
+     *
+     * <p>命中就**整层不画**：那块位置变成空白窗，但 View 本身、布局、点击事件
+     * 全部原样保留 —— 我们只在 {@code draw} 这一步跳过，从不碰触摸分发。
+     *
+     * <h3>判据（全部是几何/结构事实）</h3>
+     * <ul>
+     *   <li>必须是 {@code ImageView}（React 的封面就是 ReactImageView / ExpoImageView）；</li>
+     *   <li>尺寸在「小图标」与「整屏底图」之间：≥180x120 且 ≤55% 屏面积；</li>
+     *   <li>不是模糊底图（{@link #imgKind} = {@code IMG_BLUR}）—— 那是播放页背景，归播放页那套；</li>
+     *   <li>不在弹层 / 面板里（{@link #inFloatingLayer}）—— 下载音轨、简介那些面板不动。</li>
+     * </ul>
+     *
+     * <p>⚠️ 只能按「尺寸 + 是否底图」认封面 ⇒ 声优头像、类型封面这种「也是图片」的东西
+     * 可能被一并遮住。真机上要收紧只能再加容器判据，那需要一次层级 dump。
+     */
+    private static boolean coverBlocked(View v) {
+        try {
+            if (!sArmed) return false;
+            if (!RemoteConfig.get().coverBlock) return false;
+            if (!(v instanceof android.widget.ImageView)) return false;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w < 180 || h < 120) return false;
+            if (w * 100 >= (long) sSW * 96 && h * 100 >= (long) sSH * 96) return false;
+            if ((long) w * h * 100L > (long) sSW * sSH * 55L) return false;
+            if (imgKind(v) == IMG_BLUR) return false;
+            if (inFloatingLayer(v)) return false;
+            return true;
         } catch (Throwable t) {
             return false;
         }
@@ -5406,21 +8314,13 @@ public final class BgPeel {
     private static boolean paintAligned(Canvas c, Bitmap bmp, View v, Rect clip,
                                         boolean zoomDegrade) {
         if (bmp == null || bmp.isRecycled() || bmp.getWidth() <= 0 || bmp.getHeight() <= 0) return false;
-        // ★★ v0.1.23 用户第 3 条：只要是「清晰壁纸」而这一层正在<b>大跨度</b>缩放转场
-        //   （作品信息页打开/关闭那一下），就自动降级成毛玻璃，免得清晰壁纸跟着放大、
-        //   和底下 WindowBg 那张对不上。
-        //   ★★ v0.1.27 用户第 4 条：阈值从 2% 抬到 8%。2% 太小了 —— 图片浏览翻到
-        //   最后一张时的回弹、列表的轻微缩放都会命中，结果「最后一张图片背后多一层
-        //   模糊」。真正的转场缩放是 20%+，8% 这条线正好把两者分开。
-        //   ★★ v0.1.28 用户第 2 条：**降级只给显式要求的调用方**（zoomDegrade）。
-        //   以前是「只要画的是清晰壁纸就自动降级」，于是图片浏览翻页的回弹、
-        //   播放页封面切换的微缩放，都会把<b>内容图</b>连带换成毛玻璃 ——
-        //   用户看到的就是「最后一张图片背后一层接近全屏的高斯模糊」。
-        //   现在内容图那条路完全不参与降级。
-        if (zoomDegrade && bmp == sWpBmp && sWpBarBmp != null
-                && Math.abs(treeScale(v) - 1f) > ZOOM_BLUR_MIN) {
-            bmp = sWpBarBmp;
-        }
+        // ★★★ v0.1.72（r74）：**「缩放转场就降级成毛玻璃」这条补丁已删除**。
+        //   它（v0.1.23 起）解决的是「父层把 scale concat 进画布 ⇒ 清晰壁纸跟着放大 /
+        //   错位」，本质是「用模糊盖住错位」。可它只作用于<b>调用方显式要求</b>的那一层，
+        //   同一屏里别的层不降级 ⇒ 根层糊、子层清楚 ⇒ 转场中反而多出一条硬边，
+        //   正是用户 r74 第 2 条说的「封面上下两条错位硬边，闪一下就恢复」。
+        //   本轮在下面对 dst 做<b>真正的 scale 补偿</b>（见 {@link #canvasScale}），
+        //   壁纸在整个转场里都钉死在屏幕上 ⇒ 错位从根上不存在，降级自然多余。
         int[] loc = LOC.get();
         try {
             // ★★★ v0.1.41（r12 证据 A）：**改用 getLocationOnScreen**。
@@ -5438,7 +8338,22 @@ public final class BgPeel {
         //   Canvas#getMatrix 的逆矩阵把坐标系拉回窗口空间 —— 硬件画布上那个矩阵
         //   并不包含父层的平移（实测 r28：底部导航栏 / 迷你播放 / 面板全部画到屏幕外，
         //   信息页则整体向下错位 loc.y 个像素）。这里退回 r23~r27 用的、被真机验证过的算法。
-        RectF dst = coverRect(bmp, -loc[0], -loc[1]);
+        //
+        // ★★★ v0.1.72（r74，本轮的硬骨头）：**转场缩放必须除掉**。
+        //   上面那条算法隐含一个假设：本层画布与屏幕是 1:1（只有平移）。
+        //   而 RN 的页面转场（播放页展开 / 收成迷你条 / 打开详情页）是给
+        //   <b>整棵子树</b>加 scale ⇒ 画布已经被父层缩小/放大过，
+        //   于是「本地坐标」比「屏幕坐标」小/大了 1/scale 倍：
+        //       screen = loc + scale · local        ⇒  local = (screen − loc) / scale
+        //   旧代码按 scale=1 直接减 loc，位图就被<b>再乘一次 scale</b> 画出去 ——
+        //   转场中每一层各画一块「放大/缩小且错位」的壁纸，层与层的矩形边界就是
+        //   用户看到的那两条硬边；转场一结束 scale 回到 1，硬边自己消失
+        //   （正是 r74 第 2 条「闪一下就恢复」）。
+        //   现在把 scale 除掉：dst 用 (屏幕矩形 − loc) / scale 表示，
+        //   父层再乘回 scale ⇒ 落点与尺寸都与屏幕严格对齐，全程钉死不动。
+        float cs = canvasScale(v);
+        float inv = 1f / cs;
+        RectF dst = coverRect(bmp, -loc[0] * inv, -loc[1] * inv, sSW * inv, sSH * inv);
         Rect src = SRC.get();
         src.set(0, 0, bmp.getWidth(), bmp.getHeight());
         int save = c.save();
@@ -5482,7 +8397,10 @@ public final class BgPeel {
         } catch (Throwable t) {
             return false;
         }
-        RectF dst = coverRect(bmp, -loc[0], -loc[1]);
+        // ★★★ v0.1.72（r74）：和 {@link #paintAligned} 同一条修正 —— 转场缩放要除掉。
+        float cs = canvasScale(v);
+        float inv = 1f / cs;
+        RectF dst = coverRect(bmp, -loc[0] * inv, -loc[1] * inv, sSW * inv, sSH * inv);
         Rect src = SRC.get();
         src.set(0, 0, bmp.getWidth(), bmp.getHeight());
         int save = c.save();
@@ -5605,16 +8523,72 @@ public final class BgPeel {
      * 否则毛玻璃和清晰区会错位。
      */
     private static RectF coverRect(Bitmap bmp, float left, float top) {
+        return coverRect(bmp, left, top, sSW, sSH);
+    }
+
+    /**
+     * ★★★ v0.1.72（r74）：目标矩形可指定的版本 —— 给「转场缩放补偿」用。
+     *
+     * <p>屏幕坐标系里要铺满 {@code vw × vh}；调用方传进来的 {@code vw/vh} 已经是
+     * 「屏幕尺寸 ÷ 画布累计缩放」，{@code left/top} 也已经是 {@code −loc ÷ 缩放}。
+     * 父层再把这套局部坐标乘回 scale ⇒ 落点与尺寸和屏幕严格对齐。
+     *
+     * <p>scale=1 时与两参数版逐像素等价（{@code vw=sSW, vh=sSH}），
+     * 所以非转场画面完全不受影响。
+     */
+    private static RectF coverRect(Bitmap bmp, float left, float top, float vw, float vh) {
         RectF dst = DST.get();
         int iw = bmp.getWidth();
         int ih = bmp.getHeight();
-        float scale = Math.max((float) sSW / iw, (float) sSH / ih);
+        if (vw < 1f) vw = 1f;
+        if (vh < 1f) vh = 1f;
+        float scale = Math.max(vw / iw, vh / ih);
         float dw = iw * scale;
         float dh = ih * scale;
-        dst.set(left + (sSW - dw) / 2f, top + (sSH - dh) / 2f,
-                left + (sSW + dw) / 2f, top + (sSH + dh) / 2f);
+        dst.set(left + (vw - dw) / 2f, top + (vh - dh) / 2f,
+                left + (vw + dw) / 2f, top + (vh + dh) / 2f);
         return dst;
     }
+
+    /**
+     * ★★★ v0.1.72（r74）：本层画布相对<b>屏幕</b>的累计缩放（含自身与祖先）。
+     *
+     * <p>为什么要它：{@link #paintAligned} 用 {@code getLocationOnScreen()} 换算落点，
+     * 而那个 API 返回的是「本层原点在屏幕上的<b>变换后</b>位置」，
+     * 画布本身又已经被父层的 scale 缩过 —— 两者不配套就会错位。
+     * 关系是：{@code screen = loc + scale · local}。
+     *
+     * <p>RN 的转场（播放页展开 / 收成迷你条）正是整棵子树 scale，
+     * 于是 r74 用户在转场那一瞬看到的「封面上下的错位硬边」就是这里没除 scale。
+     * 异常 / 怪异值一律按 1 处理 ⇒ 退化成旧行为，不会比现在更差。
+     */
+    private static float canvasScale(View v) {
+        // ★★★ v0.1.74（r77「上下滑动超级卡顿」的正解）：**稳态零开销。**
+        //   这个方法在每次 {@code paintAligned} 里都跑，列表页滚动一帧几百层；
+        //   哪怕只数 6 层祖先，也是「几百 × 十几」的 getter，白白吃掉渲染预算
+        //   （实测 50th 21ms —— 每帧都超 16.6ms 预算）。
+        //   而稳态下<b>根本没有 scale</b>：转场才是唯一的来源，且转场由心跳
+        //   （150ms 一拍）去探测并置 {@link #sTransitAt}。
+        //   所以这里只看一个时间戳：不在转场窗口内就直接返回 1，不做任何遍历。
+        if (System.currentTimeMillis() - sTransitAt > 600L) return 1f;
+        float ts = treeScale(v);
+        // ★★★ 只补偿「真正的转场量级」（0.55 ~ 1.9 倍）。
+        //   为什么必须夹：{@link #treeScale} 是把 16 层祖先的 scaleX 乘起来，
+        //   只要链上任何一层残留了迷你条收缩动画那种 0.08 之类的值，
+        //   乘出来的就是离谱值 —— 按它去「除」，壁纸会被缩成左上角一小块，
+        //   整层看起来又是「透明」。宁可错位几像素，也绝不能把整层画飞。
+        if (Float.isNaN(ts) || ts < 0.55f || ts > 1.9f) {
+            if (ts != 1f && sScaleLogs < 6) {
+                sScaleLogs++;
+                log("scale skip " + ts + " on " + name(v));
+            }
+            return 1f;
+        }
+        return ts;
+    }
+
+    /** 「缩放补偿被跳过」的日志条数（诊断用，限 6 条）。 */
+    private static volatile int sScaleLogs;
 
     /** 这块 View 是不是「满宽」。 */
     private static boolean isFullWidth(View v) {
@@ -5798,6 +8772,10 @@ public final class BgPeel {
             //   页面就是**透明的**（用户看到播放页卡片透出桌面）。
             //   现在只停轮询，不改 armed：位图还在，绘制继续，快照才是完整的。
             sPoll = null;
+            // ★ r107：r105 在这里的 forgetPlayState() 已撤回。
+            //   实测「退后台就清账」会让播放页从后台回来时封面不再显示
+            //   （封面那一路判据依赖 PLAY_BG / sPlayWinPage 的记忆），
+            //   用户要求先保证播放页正常，这里恢复成只停轮询。
         }
     }
 
@@ -5875,6 +8853,12 @@ public final class BgPeel {
         AccentColor.update(use, cfg);
 
         updateMetrics(decorOf(a));
+        // ★★★ v0.1.76（r79 第 1 条）：**不再在 apply() 里充满重绘额度。**
+        //   apply 会在切页面 / 配置变化时触发，额度被反复充满 ⇒ 心跳每 150ms 都有活干
+        //   （invalidateTree 一棵<b>藏在迷你条后面</b>的播放页子树）——
+        //   实测这就是「迷你条存在时首页滑动 99th 350ms」的极值帧来源。
+        //   额度现在只由真正的事件充：seam（播放页刚出现）/ 转场收尾。
+        sResumeRedoAt = 0L;
 
         if (changed) {
             // ★ 用户第 5 条：切回宿主默认背景（armed 掉下去）⇒ 立刻关掉所有文字阴影。
@@ -6007,11 +8991,61 @@ public final class BgPeel {
      * 总上限 120 条 —— 一次录屏就能看出「哪些层被谁接管了、哪些没被接管」。
      */
     private static void hit(String prefix, View v, Rect r) {
+        // ★★★ v0.1.70（r73）：「这块是被谁接管的」不再靠日志预算 —— 记在 PAINTER 里，
+        //   由 {@link #probePlayTree} 连同坐标一起打到 logcat。
+        //   前几轮 `paint play blur big` 到底有没有命中封面那层，就是因为
+        //   logOnce 的 140 条预算被别的 key 吃光而查不出来。
+        try {
+            if (v != null) {
+                // ★★★ v0.1.87（r111）：**诊断记账降到「调试日志」开关后面。**
+                //   这里原来每画一层、每帧都要做一次 String.replace + WeakHashMap.put，
+                //   在大列表里就是每帧几百次分配 —— 对宿主是纯负担，而它只服务于
+                //   probePlayTree 的日志。PAINTER 只在 debugLog 打开时才维护。
+                if (RemoteConfig.debugLog()) {
+                    PAINTER.put(v, prefix.replace(" -> ", "").trim());
+                }
+                // ★ v0.1.80：记下「画它的时候它在哪一页」，换页即作废（见 wasPaintedAsPlay）
+                //   ★ 这条是**功能**（判档用），不能关。
+                if (prefix.startsWith("paint play")) {
+                    PLAY_PAINT_PAGE.put(v, new java.lang.ref.WeakReference<>(pageAnchorOf(v)));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        // ★ v0.1.74（r88）：只要出现「播放页」相关命中，就武装 8 秒的大层快照窗口
+        //   —— 首次打开那一下色块、返回那一瞬的空白，都在这 8 秒里。
+        try {
+            if (prefix != null && prefix.startsWith("paint play")) snapArm();
+        } catch (Throwable ignored) {
+        }
+        // ★ v0.1.74（r88）：命中序列（logcat tag = MoriHit，按「动作+签名」400ms 去重）。
+        //   这是唯一能看清「转场那几帧里，谁被 drop、谁被 paint」的通道。
+        try {
+            if (sHitLogLeft > 0 && RemoteConfig.debugLog()) {
+                String key = prefix + signature(v);
+                Long last = HITLOG_AT.get(key);
+                long now = System.currentTimeMillis();
+                if (last == null || now - last > 400L) {
+                    HITLOG_AT.put(key, now);
+                    sHitLogLeft--;
+                    android.util.Log.i("MoriHit", (now % 100000) + " " + prefix
+                            + name(v) + " " + r.width() + "x" + r.height()
+                            + " a=" + alphaOf(v) + " kids=" + kidsOf(v));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         if (!logOnce("hit:" + prefix + signature(v), null)) return;
         log(prefix + name(v) + " " + r.width() + "x" + r.height()
                 + " top=" + topOf(v) + " kids=" + kidsOf(v) + " bg=" + desc(v.getBackground())
                 + " a=" + alphaOf(v));
     }
+
+    /** ★ v0.1.74（r88）：MoriHit 的去重表 + 剩余额度。 */
+    private static final java.util.Map<String, Long> HITLOG_AT =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<String, Long>());
+
+    private static volatile int sHitLogLeft = 900;
 
     /** 「这个 key 只打一次」的登记表（13 轮日志饥饿的解法，见 {@link #hit}）。 */
     private static final java.util.Map<String, Boolean> ONCE =
@@ -6077,6 +9111,8 @@ public final class BgPeel {
 
     /** 每 10 秒最多一条：这一轮到底画了多少层（判断「生效没生效」的最快线索）。 */
     private static void maybeSummary() {
+        // ★ v0.1.87：这是纯诊断（每 10 秒一行的统计），只在「调试日志」打开时打
+        if (!RemoteConfig.debugLog()) return;
         long now = System.currentTimeMillis();
         if (now - sLastSummaryAt < 10000L) return;
         if (sSeen == 0 && sSkipped == 0 && sLeaf == 0 && sBar == 0
@@ -6133,11 +9169,9 @@ public final class BgPeel {
             //   重建之后它们全都对不上 ⇒ 每一层都判 false ⇒ 谁都不铺 ⇒
             //   露出的就是宿主那一层（开防偷窥时就是带蒙层的封面）。
             //   回前台时清空这些账，让新的一轮重新认一次。
-            PLAY_WIN.clear();
-            sPlayScreen = null;
-            sSeekPageAnchor = null;
-            sPlayHoldUntil = 0L;
-            sPlayHoldPage = null;
+            // ★ v0.1.81：统一走 forgetPlayState（比这里原来那份多清了
+            //   PLAY_PAINT_PAGE / PLAY_BG / sPlayWinPage / sPlayPaintedAt）。
+            forgetPlayState();
             // ★★★ v0.1.47（r47 用户第 4 条）：**只清缓存不够，必须让整棵树重画**。
             //   「迷你条状态下退后台→回前台→再展开播放页」那一屏，各层的绘制指令
             //   还躺在硬件加速的 RenderNode 里 —— 状态翻转了也没有任何一层会重跑
@@ -6146,6 +9180,7 @@ public final class BgPeel {
             //   invalidate 一遍，强制它们用此刻的状态重新录一帧。
             View decor = a == null ? null : decorOf(a);
             if (decor != null) invalidateTree(decor);
+            // ★ r107：r106 补的 300 / 700ms 两拍已撤回（会把播放页封面弄丢）。
         } catch (Throwable ignored) {
         }
     }
@@ -6184,6 +9219,11 @@ public final class BgPeel {
         sWpBarBmp = null;
         sWpPlayBmp = null;
         sWpGlassBmp = null;
+        // ★ v0.1.73：换壁纸 / 关功能后，「对象级底图」的账也要作废，否则内层会继续
+        //   drop 给一张已经不存在的根底板。
+        sPlayRootBgView = null;
+        sPlayRootBgBmp = null;
+        ROOT_BG.clear();
         // ★ v0.1.41：Paint 字段缓存一并作废（换壁纸 / 关功能后重新认一次）。
         GlassPaint.reset();
         sPainted = false;
