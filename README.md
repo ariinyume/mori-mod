@@ -1,11 +1,14 @@
 # MoriMod · DLsiteSound 美化模块
 
-> LSPosed 运行时注入模块。为 **DLsiteSound** 提供自定义背景、强调色、毛玻璃面板与字体替换。
+> 一个 LSPosed / Xposed 模块，为 **DLsiteSound** 提供自定义背景、强调色、毛玻璃面板与字体替换（或者其他什么梦到的功能）。
+>
 > 不修改宿主 APK、不影响宿主签名、不联网。
+>
+> 兴趣驱动开发的项目，随时断更跑路。
 
 | | |
 |---|---|
-| 宿主 | `jp.co.eisys.dlsitesound`（实测 2.22.1） |
+| 宿主 | `jp.co.eisys.dlsitesound`（实测 2.22.2） |
 | 模块包名 | `io.github.ariinyume.morimod` |
 | 当前版本 | `0.1.97` / versionCode `10098` |
 | 框架 | libxposed API 102（LSPosed / 现代 Xposed） |
@@ -67,14 +70,7 @@ bash  tools/run_verify.sh           # 有 bash 的环境
 
 逆向分析笔记与规划稿（`doc/`、`*_PRD_*.md`）含内部路径与真机日志片段，**不随仓库分发**，仅本地留存。
 
-已沉淀到源码注释里的结论以 `hook/BgPeel.java` 为准；历史轮次标题如下，供检索对照：
-
-| 轮次 | 内容 |
-|---|---|
-| r14 · `NOTES_r14` | 毛玻璃层、播放页判定、顶部黑条、小字强调色的逐条根因（含日志人证） |
-| r13 · `NOTES_r13_真因与v0142` | v0.1.42 的根因与落地 |
-| r13 · `NOTES_r13_路径A落地与验证` | 路径 A 的落地步骤与验证 |
-| r12 · `ANALYSIS_r12` | 面板玻璃根因分析与多条候补路径 |
+已沉淀到源码注释里的结论以 `hook/BgPeel.java` 为准。
 
 ## 脱敏说明
 
