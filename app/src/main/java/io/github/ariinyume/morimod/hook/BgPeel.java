@@ -1054,6 +1054,48 @@ public final class BgPeel {
     /** 需要重新判一次并让视图树重画。 */
     private static volatile boolean sDirty = true;
 
+    /**
+     * ★★★ v0.1.90：{@code armed} 由「开」掉到「关」的连续轮数（防抖）。
+     *
+     * <p>为什么需要：{@link #apply} 每 {@value #POLL_MS} 毫秒跑一次，判据是
+     * {@code ready = want && 位图可用}。壁纸位图在切歌 / 新封面解码 / 系统内存压力下
+     * 会被回收或正在重解码，于是 {@code ready} 会短暂掉成 false、下一轮又回来。
+     * 旧版只要 {@code ready != sArmed} 就 {@link #invalidateTree} 整棵 DecorView
+     * （最多 800 个节点）⇒ 那两轮各重录一次全树。
+     *
+     * <p>真机 trace 实测（2.22.2 / 60s / 跨作品切歌）：每次切歌都出现两帧
+     * <b>266.8ms / 207.2ms</b>，间隔 1.73s ≈ 一个轮询周期；整棵树从 DecorView 到
+     * {@code ReactScrollView} 每一层都是 261ms（首页 3 排横向列表全部重录）。
+     * 关掉插件后同位置最长帧 <b>6.3ms</b>。
+     *
+     * <p>所以「想要壁纸、但这一轮暂时拿不到位图」绝不能当成「已经关掉了」——
+     * 连续 {@value #ARM_DROP_CONFIRM} 轮（≈4.5 秒）都拿不到才认账。
+     */
+    private static volatile int sArmDropTicks;
+
+    /** {@link #sArmDropTicks} 需要连续几轮才真的翻转（4.5 秒，扛得住解码与 GC 抖动）。 */
+    private static final int ARM_DROP_CONFIRM = 3;
+
+    /** v0.1.90 诊断：整窗重绘 / 轻量重绘各发生了几次（打日志用）。 */
+    private static volatile int sFullRedraws;
+    private static volatile int sLightRedraws;
+
+    /** v0.1.90 诊断日志已打印条数（限量，别刷屏）。 */
+    private static volatile int sDbgRedraw;
+
+    /** {@link #sDbgRedraw} 的条数上限。 */
+    private static final int DBG_REDRAW_BUDGET = 40;
+
+    /**
+     * ★★★ v0.1.92 诊断：{@code View#draw} 钩子里**我们自己**花掉的时间。
+     *
+     * <p>trace 里 174ms 全部落在 {@code ScreenStack} 自己的 {@code Record View#draw()}
+     * 上，子 View 加起来不到 1ms ⇒ 不是绘制、不是子层重录，而是<b>钩子代码本身</b>。
+     * 这个钩子对<b>每一个</b> View 都跑，一帧几百个 View，单次 0.2ms 就是 160ms。
+     */
+    private static volatile int sSlowDraw;
+    private static final int SLOW_DRAW_BUDGET = 24;
+
     private static int sLogs;
     private static long sSeen;
     private static long sSkipped;
@@ -1729,7 +1771,7 @@ public final class BgPeel {
                             //   的网格一起作废（实测 99th 顶到 200ms）。所以第二拍只重录
                             //   **占屏 ≥40% 且没有子 View 的背景层** —— 就是出错的那几层。
                             if (delay > 100L) invalidateBigLeafs(page, 0, 0);
-                            else invalidateTree(page);
+                            else repaintLayers(page, "mountPage");
                             if (sMountLogs < 8 && RemoteConfig.debugLog()) {
                                 sMountLogs++;
                                 log("mount repaint(" + delay + ") -> " + name(page) + " "
@@ -1929,8 +1971,9 @@ public final class BgPeel {
                 //   「强调色还没生效」（壁纸偏黑 ⇒ seed none ⇒ off）时创建的界面，
                 //   颜色永远停在宿主紫 —— 用户看到的就是「还有部分文字是淡紫色」。
                 //   换壁纸 / 换风格 / 开开关都走这里，重新算一遍就干净了。
+                // ★ v0.1.91：retintTree 现在**谁变了谁 invalidate**，
+                //   这里不再整树重绘（那一下就是 800 个 View、200ms）。
                 retintTree(root, 0);
-                invalidateTree(root);
             }
         } catch (Throwable ignored) {
         }
@@ -1987,6 +2030,18 @@ public final class BgPeel {
                 }
             }
         } catch (Throwable ignored) {
+        }
+        // ★★★ v0.1.91：**改完就地作废这一层**。
+        //   `TextPaint#setColor` 与 `writeColor` 都是「改那个 int」，不会触发
+        //   View 的 display list 重录；旧版靠最后 invalidateTree(整棵 DecorView)
+        //   兜底，一兜就是 800 个 View、200ms+。改成谁变了谁 invalidate，
+        //   配置变更这条路上再也不用整树重绘。
+        //   注意：此刻 n 里只有**本层**的改动数（子 View 的还没加进来）。
+        if (n > 0) {
+            try {
+                v.invalidate();
+            } catch (Throwable ignored) {
+            }
         }
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
@@ -2102,7 +2157,19 @@ public final class BgPeel {
                                 GlassPaint.end(tk);
                             }
                         }
-                        if (paintWallpaper((Drawable) self, (Canvas) arg0, requireOpaque)) {
+                        long tWp = System.nanoTime();
+                        boolean wp = paintWallpaper((Drawable) self, (Canvas) arg0, requireOpaque);
+                        long wpMs = (System.nanoTime() - tWp) / 1000000L;
+                        if (wpMs >= 8L && sSlowDraw < SLOW_DRAW_BUDGET) {
+                            sSlowDraw++;
+                            log("slowpaint " + wpMs + "ms hit=" + wp + " on "
+                                    + self.getClass().getSimpleName());
+                        }
+                        if (wp) {
+                            // ★★★ v0.1.93：记下「这块背景归我们管」的那个 View。
+                            //   重绘时只作废它，别去碰 ScreenStack 那种容器 ——
+                            //   容器重录一次 80ms+（见 repaintLayers 的注释）。
+                            rememberBgOwner((Drawable) self);
                             return null;   // 已经画好壁纸，宿主原本的纯色/渐变不画
                         }
                     }
@@ -2187,6 +2254,7 @@ public final class BgPeel {
                 boolean veil = false;
                 /** 这一层是窗口根（DecorView）⇒ 收尾时把封面矩形兜一次底。 */
                 boolean veilRoot = false;
+                long tHook = System.nanoTime();
                 try {
                     Object self = chain.getThisObject();
                     Object arg0 = chain.getArg(0);
@@ -2318,6 +2386,7 @@ public final class BgPeel {
                     }
                 } catch (Throwable ignored) {
                 }
+                long tPre = System.nanoTime();
                 Object r = chain.proceed();
                 // ★★★ v0.1.44：防偷窥封面的强调色罩必须在**宿主画完之后**叠上去，
                 //   否则会被图片本身盖掉（这正是它要罩的对象）。
@@ -2350,6 +2419,22 @@ public final class BgPeel {
                 if (veilRoot) {
                     paintWashRectsOnRoot(cv, v);
                 }
+                // ★★★ v0.1.92 诊断：单次 >=10ms 就记一笔（含「我们」与 proceed 的分项）。
+                try {
+                    long tEnd = System.nanoTime();
+                    long total = (tEnd - tHook) / 1000000L;
+                    if (total >= 10L && sSlowDraw < SLOW_DRAW_BUDGET) {
+                        sSlowDraw++;
+                        long pre = (tPre - tHook) / 1000000L;
+                        log("slowdraw " + total + "ms（我方=" + pre + "）"
+                                + (v == null ? "?" : name(v) + " " + v.getWidth() + "x" + v.getHeight()));
+                    }
+                } catch (Throwable ignored) {
+                }
+                // ★★★ v0.1.95：封面档**每一层**都记一笔（View#draw 路径，
+                //   所以 SkiaTextureView / ReactImageView 这些非 ExpoImageView 的
+                //   候选也能抓到）。traceCover 自己按尺寸档 + 限流过滤。
+                traceCover(v, "viewdraw");
                 return r;
             });
             sHooked = true;
@@ -2427,10 +2512,12 @@ public final class BgPeel {
                         // ★★★ v0.1.88（r112 用户第 2 条）：**作品封面屏蔽**——整层不画，位置留空，点击照旧
                         if (coverBlocked(v)) {
                             sPainted = true;
+                            traceCover(v, "coverBlock");
                             return null;
                         }
                         if (cv != null && paintBlurBg(v, cv)) {
                             traceExpo(v, "big");
+                            traceCover(v, "host-expo-big");
                             wash = false;
                             return null;
                         }
@@ -2440,17 +2527,20 @@ public final class BgPeel {
                         //   坐标一律用本层尺寸（不再用整屏位图对齐，见 paintLocal）。
                         if (cv != null && paintDialogGlass(v, cv, chain::proceed)) {
                             traceExpo(v, "dlg");
+                            traceCover(v, "host-expo-dlg");
                             return null;
                         }
                         // ② 半透明氛围叠加图（PurePlay 顶部紫遮罩）：换成毛玻璃
                         if (cv != null && dropVeil(v, cv)) {
                             traceExpo(v, "veil");
+                            traceCover(v, "host-expo-veil");
                             wash = false;
                             return null;
                         }
                         // ③ 不透明氛围底图（播放页 playbackspbackground）：换成本地壁纸（可按档位糊）
                         if (cv != null && paintAtmos(v, cv)) {
                             traceExpo(v, "atmos");
+                            traceCover(v, "host-expo-atmos");
                             wash = false;
                             return null;
                         }
@@ -2459,6 +2549,7 @@ public final class BgPeel {
                         // 之所以要它：r73 的层级探针只能看到 `P=paint play blur big` 这种
                         // 历史归属 —— 分不清「这一刻仍在接管」还是「早先接管过一次」。
                         traceExpo(v, "host");
+                        traceCover(v, "host-expo");
                     }
                 } catch (Throwable ignored) {
                 }
@@ -2979,6 +3070,34 @@ public final class BgPeel {
             }
             return false;
         }
+        // ★★★ v0.1.96（r118 用户第 1 条，本轮只保「壁纸」这一件事）：
+        //   **播放页里的「满屏层」是底，不是内容 —— 不看半径、也不看位图。**
+        //
+        //   r117 的现场已经把两个洞同时钉死了：
+        //   <pre>
+        //   ExpoImageView 1272x2772 r=10 kind=3 bmp=140x105/blur -> big   ← 正常（接管 ⇒ 壁纸）
+        //   ExpoImageView 1272x2772 r=0  kind=0 bmp=140x105/blur -> host  ← 异常（交还宿主 ⇒ 糊封面）
+        //   </pre>
+        //   v0.1.95 只补了「位图读得到、且确实是糊的」这一半。可宿主这张底是
+        //   「封面缩到 140x105 再糊好」的独立位图，只要某一帧 drawable 还没挂上
+        //   （Fresco 换源、Skia 层接管、位图被回收），{@code privacyBitmapOf} 就是 null
+        //   ⇒ 像素判据失效 ⇒ kind 仍落 IMG_CONTENT ⇒ 下面 3120 行整层放行 ⇒
+        //   那张糊封面铺满整屏，且它在这棵子树里的位置<b>压住作品封面</b>
+        //   —— 用户描述的「背景是放大的封面糊图 + 封面本身也不显示」就是一个成因。
+        //
+        //   而播放页的骨架是固定的：底图（实测 100% / 105% 屏高）、作品封面（34%）、
+        //   文字与控件。所以「满宽 + 贴顶 + ≥92% 屏高 + 确实在播放页里」这条纯结构事实
+        //   就足以定性为「底」，任何会迟到的状态（setter 跑没跑、位图挂没挂）都影响不到它。
+        //   图片浏览 / 漫画的分页容器里同样有满屏层，用 {@link #insidePager} 挡掉。
+        //
+        //   ⚠️ 代价：播放页里万一真有一张满屏内容图，会被铺成壁纸（用户已明确：
+        //   本轮只看壁纸效果，内容不追究）。相比「壁纸永远被糊封面盖住」，这个代价更小。
+        boolean playVeil = h * 100 >= (long) sSH * 92 && topOf(v) <= 0
+                && !insidePager(v)
+                && (playEarly || (isPlayWindow(v) && screenOf(v) == null) || underPlayRoot(v));
+        if (playVeil && showPlayVeil(v, c, w, h)) {
+            return true;
+        }
         int radius = blurRadiusOf(v);
         int kind = imgKind(v);
         // 「铺满整屏 + 贴顶」就是页面背景（不管宿主有没有给 blurRadius）。
@@ -3026,7 +3145,16 @@ public final class BgPeel {
         //     ③ 它确实在播放页里（活体进度条 / 播放页窗口 / 播放页根子树）。
         boolean blurDeclared = radius > 0 && fillDecor
                 && (playContext(v) || isPlayWindow(v) || underPlayRoot(v));
-        if (kind == IMG_CONTENT && !blurDeclared) return false;
+        if (kind == IMG_CONTENT && !blurDeclared) {
+            // ★★★ v0.1.81：放行前纠偏。这一层如果上一刻还被我们铺成播放档
+            //   （`wasPaintedAsPlay`），这一帧却判成内容图 ⇒ 判定临时失效（半径读 0、
+            //   播放窗口刚被清空等）。错帧一旦录进 RenderNode，3084 行那个单向
+            //   invalidate（只许「清晰 → 播放档」）永远救不回来 ⇒ 一直糊着，
+            //   直到用户开关一次封面屏蔽触发全树重画。这里节流地补一次 invalidate，
+            //   让它按恢复后的判据重录；带次数上限，判定真坏死时不会变成重绘风暴。
+            healPlayBackdrop(v, fillDecor);
+            return false;
+        }
         if (kind != IMG_BLUR && !fullBg && !blurDeclared) {
             // veil / atmos 各有更精确的分支，这里不抢；
             // 只有「读不出像素的满屏底图」才兜底（r40 里 radius 时有时无，源头就是它）。
@@ -3146,6 +3274,89 @@ public final class BgPeel {
         sPainted = true;
         hit(play ? "paint play blur -> " : "paint cover clear -> ", v, r);
         return true;
+    }
+
+    /**
+     * ★★★ v0.1.96：<b>播放页的满屏层一律当底处理</b>（只做一件事：保证壁纸露出来）。
+     *
+     * <p>两条出路：
+     * <ol>
+     *   <li>播放页根上已经挂了我们的底板（{@link #sPlayRootBgBmp}）⇒ 这层
+     *       <b>什么都不用画</b>（{@code return true} 跳过宿主绘制），底板自然透出来；</li>
+     *   <li>底板还没挂上（开页头几帧、回前台重建）⇒ 就地铺一张播放档壁纸，
+     *       对齐用 {@link #paintAligned}（{@code getLocationOnScreen} 基准）。</li>
+     * </ol>
+     *
+     * <p>为什么不再看 {@code blurRadius} / 位图：见调用点的注释 —— 宿主那张
+     * 「放大糊封面」底图在换源 / 重建的那几帧里两条判据都可能读不到，
+     * 而这正是它漏到屏幕上、把壁纸和作品封面一起盖住的时刻。
+     *
+     * @return true = 这一层已经处理完（调用方必须跳过宿主绘制）
+     */
+    private static boolean showPlayVeil(View v, Canvas c, int w, int h) {
+        try {
+            Rect r = new Rect(0, 0, w, h);
+            if (sPlayRootBgBmp != null && underPlayRoot(v)) {
+                sPainted = true;
+                hit("drop play full -> ", v, r);
+                return true;
+            }
+            Bitmap pb = playBmp();
+            if (pb == null || pb.isRecycled()) pb = sWpBarBmp;
+            if (pb == null || pb.isRecycled()) return false;
+            if (!paintAligned(c, pb, v, r, false)) return false;
+            sBar++;
+            sPainted = true;
+            hit("paint play full -> ", v, r);
+            if (sBlurLogs < BLUR_LOG_BUDGET) {
+                sBlurLogs++;
+                log("play full r=" + blurRadiusOf(v) + " " + w + "x" + h
+                        + " top=" + topOf(v) + " ->veil");
+            }
+            notePageBackdrop(v, h, pb);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** ★ v0.1.81：「播放档 → 内容图」档位翻转纠偏的上次触发时刻（全局节流）。 */
+    private static volatile long sHealAt;
+
+    /** ★ v0.1.81：每个 View 的纠偏次数（WeakHashMap，View 回收即清）。 */
+    private static final java.util.Map<View, int[]> HEAL_CNT =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * ★★★ v0.1.81：<b>放行播放页满屏底之前的档位纠偏</b>。
+     *
+     * <p>「偶尔背景退回模糊版作品封面」的另一半：某一帧判定临时失效（半径读 0、
+     * 播放窗口刚被清空等），宿主的糊封面被放行上屏，而这条错误指令已经录进
+     * RenderNode —— {@code paintBlurBg} 里的 invalidate 只允许「清晰 → 播放档」
+     * 一个方向（防 r77 那种来回翻转的重绘风暴），反向没有任何人重画
+     * ⇒ 画面就一直停在糊封面上，直到用户开关一次封面屏蔽（触发全树重画）才恢复。
+     *
+     * <p>条件收紧到「这层上一刻确实被我们铺成播放档」（{@link #wasPaintedAsPlay}），
+     * 也就是<b>真的发生了档位翻转</b>才补一次 invalidate；全局 4 秒节流 +
+     * 每个 View 最多 8 次，判定真坏死时不会变成重绘风暴。
+     */
+    private static void healPlayBackdrop(View v, boolean fillDecor) {
+        try {
+            if (!fillDecor || !wasPaintedAsPlay(v)) return;
+            long now = System.currentTimeMillis();
+            if (now - sHealAt < 4000L) return;
+            int[] n = HEAL_CNT.get(v);
+            if (n == null) {
+                n = new int[1];
+                HEAL_CNT.put(v, n);
+            }
+            if (n[0] >= 8) return;
+            n[0]++;
+            sHealAt = now;
+            log("heal play backdrop (tier flip) -> " + name(v) + " #" + n[0]);
+            v.invalidate();
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 「窗口里够大但不是内容根」的块登记条数（v0.1.28 诊断）。 */
@@ -3735,6 +3946,89 @@ public final class BgPeel {
         }
     }
 
+    // ================= v0.1.95 封面层诊断 =================
+
+    /** {@link #traceCover} 剩余条数（每进程 60 条）。 */
+    private static volatile int sCoverTraceLeft = 60;
+
+    /** 每个 View 的上次封面 trace 时刻（800ms 限流）。 */
+    private static final java.util.Map<View, Long> COVER_TRACE_AT =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<View, Long>());
+
+    /**
+     * ★★★ v0.1.95（r117）：<b>「播放页封面那一块」到底有没有被画。</b>
+     *
+     * <p>用户第 1 条的后半句是「作品封面本身不显示」。日志里
+     * {@code ExpoImageView 1272x954 ... -> host} 说明这一层<b>交还给了宿主</b>，
+     * 但屏幕上那块区域只有背景的糊图。两种可能：
+     * <ol>
+     *   <li>这一层被执行了，但 Drawable 是空的 / 被同位置的别层盖住；</li>
+     *   <li>这一层根本没进绘制（不可见、尺寸 0、或被宿主跳过）。</li>
+     * </ol>
+     * 所以这里把「每次真的走到这一层 draw」这件事本身记下来，带屏幕矩形、
+     * Drawable 类型、位图尺寸 —— 有这条就能分清上面两种，不用再猜。
+     *
+     * <p>尺寸档取「宽度 ≥80% 屏宽 + 高度 20%~70% 屏高」：播放页封面正好是
+     * 1272x954（34%），而满屏底图（100%/105%）和列表卡片都落在这个窗口之外。
+     */
+    private static void traceCover(View v, String who) {
+        try {
+            if (sCoverTraceLeft <= 0) return;
+            if (sSW <= 0 || sSH <= 0) return;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w * 100 < (long) sSW * 80) return;
+            if (h * 100 < (long) sSH * 20 || h * 100 > (long) sSH * 70) return;
+            Long last = COVER_TRACE_AT.get(v);
+            long now = System.currentTimeMillis();
+            if (last != null && now - last < 800L) return;
+            COVER_TRACE_AT.put(v, now);
+            sCoverTraceLeft--;
+            Drawable d = null;
+            String dcls = "-";
+            String bmp = "-";
+            try {
+                if (v instanceof ImageView) d = ((ImageView) v).getDrawable();
+                if (d != null) {
+                    dcls = d.getClass().getSimpleName();
+                    Bitmap b = deepBitmap(d, 0);
+                    if (b == null) {
+                        bmp = "none";
+                    } else {
+                        bmp = b.getWidth() + "x" + b.getHeight()
+                                + (isBlurredBitmap(b) ? "/blur" : "/sharp");
+                    }
+                } else {
+                    dcls = "null";
+                }
+            } catch (Throwable ignored) {
+            }
+            int[] loc = new int[2];
+            try {
+                v.getLocationOnScreen(loc);
+            } catch (Throwable ignored) {
+            }
+            StringBuilder path = new StringBuilder();
+            try {
+                View c = v;
+                for (int i = 0; i < 5 && c != null; i++) {
+                    path.append('/').append(name(c));
+                    Object p = c.getParent();
+                    c = p instanceof View ? (View) p : null;
+                }
+            } catch (Throwable ignored) {
+            }
+            android.util.Log.i("MoriCover", name(v) + " " + w + "x" + h
+                    + " scr=" + loc[0] + "," + loc[1]
+                    + " a=" + alphaOf(v) + " vis=" + v.getVisibility()
+                    + " drawable=" + dcls + " bmp=" + bmp
+                    + " playCtx=" + (playContext(v) ? 1 : 0)
+                    + " playWin=" + (isPlayWindow(v) ? 1 : 0)
+                    + " -> " + who + "  path=" + path);
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** ★ v0.1.74（r88）：大层快照的窗口终点 / 上次时刻 / 剩余条数。 */
     private static volatile long sSnapUntil;
     private static volatile long sSnapAt;
@@ -4320,17 +4614,15 @@ public final class BgPeel {
                         if (System.currentTimeMillis() - sPlayOnScreenAt < 2000L) snapArm();
                     } catch (Throwable ignored) {
                     }
-                    // ★ v0.1.83：稳态抓拍（保证遮罩手里那张是「正常页面」）
-                    try {
-                        long t = System.currentTimeMillis();
-                        // ★ v0.1.81：2.5 秒 → 4 秒。整树软件绘制一次是几十毫秒，
-                        //   稳态里没必要这么勤；切页那一刻另外还有一次精准抓拍。
-                        if (t - sPageSwitchAt > 2000L && t - sSnapCapAt > 4000L) {
-                            sSnapCapAt = t;
-                            capturePageSnap();
-                        }
-                    } catch (Throwable ignored) {
-                    }
+                    // ★★★ v0.1.92：**稳态抓拍整条删除。**
+                    //   它是 r93~r99「切页空窗遮罩」的供图口。遮罩在 r99、r106 两轮里
+                    //   已经被用户判定「更差」并整条回退，抓拍却留在这里 ——
+                    //   `sPageSnap` 全工程**零读取**，等于每 4 秒把整棵视图树（几百个 View、
+                    //   所有封面位图）用软件 Canvas 重绘一遍，纯烧主线程。
+                    //   而且这次软件绘制会**逐个 View 走一遍我们的 View#draw 钩子**，
+                    //   我们又把壁纸往这张注定没人看的图上画一遍 ⇒ 单次 100～200ms。
+                    //   trace 实证：11:53:11 那一帧 174ms 里 `MoriHit paint leaf` 到
+                    //   下一条日志空了 170ms，正是这段。删掉，不再产生任何绘制。
                     // ★★★ v0.1.76（r79 第 1 条，实测 99th 350ms）：**心跳里不再 dump 层级。**
                     //   「迷你条存在时首页滑动卡死」的极值帧就是这里：探测一次要遍历 24 层、
                     //   拼 91 行字符串、再走 LSPosed 的日志通道 —— 单次上百毫秒。
@@ -4647,7 +4939,7 @@ public final class BgPeel {
             View target = topFullScreenAncestor(seek);
             if (target == null) return;
             String nm = name(target) + " " + target.getWidth() + "x" + target.getHeight();
-            invalidateTree(target);
+            repaintLayers(target, "redoPlay");
             if (sRedoLogs < 4) {
                 sRedoLogs++;
                 log("redo play backdrop -> " + nm + " left=" + sRedoLeft);
@@ -5289,10 +5581,7 @@ public final class BgPeel {
             if (p == null) return 0;
             long t = p >>> 8;
             int r = (int) (p & 0xFF);
-            if (System.currentTimeMillis() - t > BLUR_PENDING_TTL_MS) {
-                BLUR_PENDING.remove(v);
-                return 0;
-            }
+            boolean expired = System.currentTimeMillis() - t > BLUR_PENDING_TTL_MS;
             // ★★ v0.1.28：必须是「铺满整屏」的那一层（装饰底）。封面卡片、列表缩略图一律不算。
             if (!isScreenFillDecor(v)) return 0;
             // ★★★ v0.1.38（r43 用户第 2 条）：**分页容器里的满屏图一律不是装饰底**。
@@ -5304,19 +5593,36 @@ public final class BgPeel {
             //   现在把这两道闸换成一条结构判据：分页容器里的图永不算装饰底。
             if (insidePager(v)) return 0;
             Bitmap b = imageBitmapOf(v);
-            // ★★★ v0.1.38：读不到位图也要认（expo-image 的 drawable 不一定是 BitmapDrawable）。
-            //   以前这里 return 0 ⇒ 同一层「有时读得到、有时读不到」⇒ 播放页模糊时有时无。
-            if (b == null) return r;
-            Integer bound = BLUR_BMP.get(b);
-            if (bound != null) return bound;
-            // ★★★ v0.1.38：删掉「3 秒新鲜期」和「一个 View 只绑一张位图」两道闸。
-            //   它们当初是为了挡「图片浏览翻页把照片认成装饰底」，代价是播放页那张底图
-            //   换歌 / 切后台回来重新解码后**半径读成 0** ⇒ 播放页背景变清晰壁纸。
-            //   r43 日志把这条钉死了：整轮 `blur bg` 只有 6 条且全是 r=10，
-            //   其余帧同一个 1272x2772 层走的是 `paint veil clear`（清晰壁纸）。
-            //   现在这两道闸由上面那条 `insidePager(v)` 接管 —— 结构判据比时间窗可靠。
-            BLUR_BMP.put(b, r);
-            return r;
+            // ★★★ v0.1.81（r113 用户第 1 条「偶尔播放页背景退回模糊版作品封面」）：
+            //   **位图绑定还活着时，10 分钟 TTL 不再把它废掉。**
+            //   旧顺序是「先查 TTL，过期直接 return 0」——而播放页一开就是几十分钟、
+            //   后台一挂就是半小时，prop 不会重设（RN 只在 prop 变化时才调 setter），
+            //   待定标记一过期，这张明明还绑着的模糊底图就读成 r=0 ⇒
+            //   imgKind 判成 IMG_CONTENT ⇒ paintBlurBg 在
+            //   `kind==IMG_CONTENT && !blurDeclared` 处整层放行
+            //   ⇒ 宿主那张糊封面直接上屏，直到某次全树重画（比如开关一次封面屏蔽）才恢复。
+            //   日志实证：`imglayer ExpoImageView 1272x2772 kind=content` 数十次。
+            //   现在只要「这一刻显示的还是绑过的那张图」（待定标记仍在 ⇒ 视图还是
+            //   当年被声明模糊的那个实例，不会把别的 View 拖下水），就续期并返回半径；
+            //   结构闸（满屏 + 不在分页容器）照旧。
+            if (!expired) {
+                Integer fresh = b == null ? null : BLUR_BMP.get(b);
+                if (fresh != null && fresh > 0) return fresh;
+                if (b == null) return r;
+                BLUR_BMP.put(b, r);
+                return r;
+            }
+            // ★★★ v0.1.81：过期不再一律作废。底图换源（换歌 / 刷新）时 prop 不会重设，
+            //   「待定标记过期 + 新位图未绑定」正是换歌后的第二条触发路径。
+            //   只要它此刻仍在播放语境里且满屏，就当作同一张装饰底重绑并续期；
+            //   非播放语境维持旧行为（过期即弃，防视图回收残留）。
+            if (playContext(v) || isPlayWindow(v) || underPlayRoot(v)) {
+                BLUR_PENDING.put(v, (System.currentTimeMillis() << 8) | r);
+                if (b != null) BLUR_BMP.put(b, r);
+                return r;
+            }
+            BLUR_PENDING.remove(v);
+            return 0;
         } catch (Throwable t) {
             return 0;
         }
@@ -5363,6 +5669,34 @@ public final class BgPeel {
         //   装饰底在 bundle 里就是 `PlayerBackground` / `PlaylistDetailBackground`，
         //   两者都是 `contentFit=cover` **铺满整屏**；封面卡片永远没有 85% 屏高。
         if (blurRadiusOf(v) > 0 && isScreenFillDecor(v)) return IMG_BLUR;
+        // ★★★ v0.1.95（r117 用户第 1 条「播放页背景变成放大的作品封面、封面本身不显示」）：
+        //   **radius 读不到，位图像素自己会说话。**
+        //
+        //   r117 现场（logcat MoriTrace，同一块 1272x2772 的两个时刻）：
+        //   <pre>
+        //   ExpoImageView 1272x2772 r=10 kind=3 bmp=140x105/blur -> big    ← 正常（接管，铺壁纸）
+        //   ExpoImageView 1272x2772 r=0  kind=0 bmp=140x105/blur -> host   ← 异常（交还宿主，糊封面）
+        //   </pre>
+        //   `blurRadiusOf` 的第一行是 `BLUR_PENDING.get(v)`，**拿不到就直接 return 0**。
+        //   而那个标记只在 `ExpoImageViewWrapper#setBlurRadius` 被调用时写入 ——
+        //   RN 只在 prop <b>变化</b>时才调 setter：新开一个作品、或从后台回前台，
+        //   View 是新建/复用的，prop 没"变化" ⇒ setter 不跑 ⇒ 标记缺席 ⇒ 半径读 0。
+        //   于是 `imgKind` 落到 IMG_CONTENT，`paintBlurBg` 在
+        //   `kind == IMG_CONTENT && !blurDeclared` 处整层放行 ⇒ 宿主那张糊封面直接上屏。
+        //
+        //   而这块图**根本不是内容图**：它是宿主把封面缩到 140x105 再糊好的背景底
+        //   （像素级证据 `isBlurredBitmap` 为真，现场日志已经打出来 `/blur`）。
+        //   所以把「满屏 + 不在分页容器 + 位图确实是糊的」作为第三条判据 ——
+        //   纯像素事实，**不依赖任何会迟到的状态**（setter 有没有跑、playContext 建没建立）。
+        //
+        //   ⚠️ 为什么不会误伤内容图（v0.1.75 那两条「满屏大图变壁纸 / 闪烁」）：
+        //     ① 内容图是<b>清晰</b>的，`isBlurredBitmap` 直接否掉；
+        //     ② 图片浏览/漫画在 ViewPager 里翻同一层，`insidePager` 否掉；
+        //     ③ 作品封面是 1272x954（34% 屏高），`isScreenFillDecor` 要 85% 否掉。
+        //   三道闸缺一不可，所以只会命中「真·满屏糊底」。
+        if (isScreenFillDecor(v) && !insidePager(v) && isBlurredBitmap(privacyBitmapOf(v))) {
+            return IMG_BLUR;
+        }
         Drawable d;
         try {
             if (!(v instanceof ImageView)) return IMG_CONTENT;
@@ -8006,8 +8340,32 @@ public final class BgPeel {
             //   铺玻璃＝画一张整屏位图，落点靠 getLocationInWindow 算 ⇒ 就是
             //   「卡住一块壁纸」和「面板消失」的那条路。现在面板的玻璃来自
             //   它自己的底色 Paint（见 glassToken），这条叶子层不画即可。
+            // ★★★ v0.1.97（r119 用户第 1 条）：**「叶子」整层不画的前提是它不画图。**
+            //
+            //   r119 现场（logcat，作品封面那层，连续十几次逐字一致）：
+            //   <pre>
+            //   MoriTrace: ExpoImageView 1272x954 r=0 kind=0 bmp=540x420/sharp -> host
+            //   MoriCover: ExpoImageView 1272x954 ... drawable=BitmapDrawable bmp=540x420/sharp -> host-expo
+            //   MoriHit  : drop sheet leaf -> ExpoImageView 1272x954 a=1.0 kids=0   ← 就在同毫秒
+            //   </pre>
+            //   链路是这样的：{@code ExpoImageView} 自己重写了 {@code draw}，我们的
+            //   ExpoImage 钩子先跑 → 三条底图判据全不成立（34% 屏高，不是底）⇒
+            //   `chain.proceed()` → `super.draw()` → **{@code View#draw} 钩子又跑一遍** →
+            //   这里按「宽度≥86% 屏宽 + 高度 12%~92% + 贴底 + 在浮层里 + 没有子 View」
+            //   判成「底部面板的叶子底色」⇒ <b>整层不画</b> ⇒ 作品封面直接消失。
+            //   所以「封面不显示」根本不是码率/图层问题，是我们自己吃掉了它。
+            //
+            //   而「叶子可以整层不画」这条规则本来只对<b>一块纯底色 / 毛玻璃</b>成立
+            //   （面板本体用纯色铺成、内容在兄弟层上）。只要这层自己还要画一张图，
+            //   drop 就等于把内容吃掉 —— 加一道「自己不画图才允许 drop」的闸，
+            //   纯色叶子（ReactViewGroup + background）判据完全不受影响。
+            //
+            //   ⚠️ 只在<b>主窗口那条宽松判据</b>（{@link #mainWindowSheet}）上放宽：
+            //   真正的底部面板 / 弹层（{@link #insideBottomSheet} / {@link #inDialogWindow}）
+            //   行为<b>一个字都不改</b> —— 那里确实有「纯图片铺成的紫面板底」依赖整层 drop。
+            boolean realFloat = insideBottomSheet(v) || inDialogWindow(v);
             if (kids == 0 && !isVideoSurface(v) && isSheetLike(v)
-                && inFloatingLayer(v)) {
+                && (realFloat || (mainWindowSheet(v) && !paintsOwnImage(v)))) {
                 sScrim++;
                 sPainted = true;
                 hit("drop sheet leaf -> ", v, r);
@@ -8655,6 +9013,28 @@ public final class BgPeel {
     }
 
     /**
+     * ★★★ v0.1.97：<b>这一层自己是不是还要画一张图</b>（决定「叶子能不能整层不画」）。
+     *
+     * <p>见 {@code hookViewDraw} 里 `drop sheet leaf` 那段注释：作品封面那块
+     * {@code ExpoImageView 1272x954} 因为「满宽 + 34% 屏高 + 贴底 + 在浮层里 + 无子 View」
+     * 被判成面板叶子，整层 drop ⇒ 封面消失。凡是 {@code ImageView} 且手里有 drawable 的，
+     * 它画的<b>就是内容</b>，不能省。
+     *
+     * <p>纯色叶子（面板本体那种 {@code ReactViewGroup} + 不透明 background）不是
+     * {@code ImageView} ⇒ 这条闸对它们不生效，原来的面板处理完全不变。
+     */
+    private static boolean paintsOwnImage(View v) {
+        try {
+            if (!(v instanceof android.widget.ImageView)) return false;
+            android.graphics.drawable.Drawable d =
+                    ((android.widget.ImageView) v).getDrawable();
+            return d != null;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
      * 这一层是不是「从屏幕底部升起来」的那一大片（v0.1.31 抽出来单独用）。
      *
      * <p>两条：<b>顶边不贴屏幕顶</b>（面板一定是从下面升上来的）、
@@ -8833,7 +9213,28 @@ public final class BgPeel {
         }
         // ★ 判据是「壁纸真的拿得到」，不是「用户想要」—— v0.1.10 发白就是因为混用了这两者
         boolean ready = want && use != null;
-        boolean changed = (ready != sArmed) || sDirty;
+        // ★★★ v0.1.90：**「想要但这一轮拿不到位图」不是「关掉了」。**
+        //   见 {@link #sArmDropTicks}：切歌 / 封面解码 / GC 都会让位图短暂不可用，
+        //   旧版一抖就整树重绘 ⇒ 每次切歌两帧 200ms+。这里先记账，连续 3 轮
+        //   （≈4.5 秒）都拿不到才真的翻。用户主动关壁纸走的是 {@code sDirty}，
+        //   不受这道闸影响，仍然是立刻生效。
+        if (!ready && sArmed && want) {
+            int t = sArmDropTicks + 1;
+            sArmDropTicks = t;
+            if (t < ARM_DROP_CONFIRM) {
+                if (sDbgRedraw < DBG_REDRAW_BUDGET) {
+                    sDbgRedraw++;
+                    log("arm drop pending " + t + "/" + ARM_DROP_CONFIRM
+                            + " （位图瞬时缺失，本轮不重绘）");
+                }
+                return;      // 保持 sArmed / sWpBmp 原样，这一轮什么都不做
+            }
+        } else {
+            sArmDropTicks = 0;
+        }
+        // ★ v0.1.90：把「配置真的变了」和「武装状态翻转」分开 —— 两者的代价差 40 倍。
+        boolean cfgDirty = sDirty;
+        boolean changed = (ready != sArmed) || cfgDirty;
         sArmed = ready;
         sWpBmp = ready ? use : null;
         sWpBarBmp = ready ? FeatureF2.barBitmap(cfg) : null;
@@ -8863,7 +9264,18 @@ public final class BgPeel {
         if (changed) {
             // ★ 用户第 5 条：切回宿主默认背景（armed 掉下去）⇒ 立刻关掉所有文字阴影。
             if (!ready) clearAllShadows();
-            invalidateTree(decorOf(a));
+            // ★★★ v0.1.90：**分两档重绘**。见类字段 {@link #sArmDropTicks} 的实测数据：
+            //   · 配置真的变了（换图 / 改模糊 / 开关）⇒ 一次性事件，整树重绘是对的，
+            //     否则各层 RenderNode 里还留着旧底图；
+            //   · 只是 armed 翻转 ⇒ 插件画的东西只有「满屏底图」那几层，
+            //     整树重绘会把首页 3 排横向列表（几百个 View）一起作废，实测 261ms。
+            View dec = decorOf(a);
+            if (cfgDirty) {
+                // 计数在 invalidateTree 里统一做
+                invalidateTree(dec, "applyCfg");
+            } else {
+                repaintLayers(dec, "armFlip");
+            }
             // ★ v0.1.14：窗口层也要补。WindowBg 在 onResume 那一刻拿不到位图就再也不试，
             //   于是「底色被换成壁纸 + 窗口层空着」。这里每轮都叫它补一次（幂等）。
             WindowBg.retryIfMissing(a);
@@ -9179,7 +9591,7 @@ public final class BgPeel {
             //   所以除了清掉封面救援节流 / 玻璃缓存，还要把 DecorView 下所有层
             //   invalidate 一遍，强制它们用此刻的状态重新录一帧。
             View decor = a == null ? null : decorOf(a);
-            if (decor != null) invalidateTree(decor);
+            if (decor != null) repaintLayers(decor, "expandResume");
             // ★ r107：r106 补的 300 / 700ms 两拍已撤回（会把播放页封面弄丢）。
         } catch (Throwable ignored) {
         }
@@ -9232,7 +9644,7 @@ public final class BgPeel {
         // ★ 用户第 5 条：切回宿主默认背景 ⇒ 所有文字阴影关闭、回到宿主原样。
         clearAllShadows();
         Activity a = sPoll;
-        if (a != null) invalidateTree(decorOf(a));
+        if (a != null) invalidateTree(decorOf(a), "reapplyOff");
     }
 
     /**
@@ -9273,11 +9685,244 @@ public final class BgPeel {
             MAIN.post(() -> repaint(decor));
             return;
         }
-        invalidateTree(decor);
+        invalidateTree(decor, "repaintCall");
+    }
+
+    /**
+     * ★★★ v0.1.90：只作废「满屏层」的 RenderNode，<b>不碰列表里那几百个卡片</b>。
+     *
+     * <p>用来替代 {@link #invalidateTree} 处理「武装状态翻转」这类<b>非配置性</b>的重绘。
+     * 插件真正画的东西只有满屏底图，那些层的面积一定接近整屏；而列表卡片、按钮、
+     * 文字都不归我们画 ⇒ 它们被作废只会白重录。
+     *
+     * <p>实测依据（2.22.2 · 60s · 跨作品切歌 · 开插件）：
+     * 一帧 266.8ms 里整棵树从 {@code DecorView} 到 {@code ReactScrollView} 每层都占满
+     * 261ms，深度 27 那个 {@code ReactViewGroup 1272x4230}（高过屏幕的首页列表容器）
+     * 下挂 3 条 {@code ReactHorizontalScrollView}，分别 107.9 / 75.9 / 23.2ms —— 全是白重录。
+     * 关掉插件同位置最长帧 6.3ms。
+     *
+     * @return 实际作废的层数
+     */
+    /**
+     * ★★★ v0.1.93：被我们接管过背景的 View（弱引用，最多 {@link #BG_OWNERS_MAX} 个）。
+     *
+     * <p>为什么要这张表：v0.1.91/92 的重绘是「按面积找满屏层」。实测这个判据<b>选错了人</b>——
+     * {@code ScreenStack}（1272x2564，占屏 92%）也被选中、被 {@code invalidate()}，
+     * 它的 display list 重录要遍历整棵子树的绘制命令，<b>纯 CPU 80ms 以上</b>：
+     *
+     * <pre>
+     * 帧 1184268：ScreenStack 自己 84.6ms，它的子 View 加起来只有 0.4ms
+     * 帧  214745：ScreenStack 自己 86.0ms，子项 0.4ms
+     * 两帧都紧跟在 lightRedraw 之后 367 / 396ms；主线程窗口内 Running 91ms、Sleep 3.8ms
+     * </pre>
+     *
+     * <p>而插件真正要重画的东西只有一件事：<b>宿主那个不透明的 {@code BackgroundDrawable}
+     * 的 display list 里还存着旧底色命令</b>，得让它重录一遍（重录时我们的钩子返回 null，
+     * 底色就没了，壁纸透出来）。那块 drawable 属于哪个 View，{@link #ownerView} 当场就能拿到。
+     *
+     * <p>⇒ 精确到「谁被接管就作废谁」，通常 1～2 个 View，容器与列表一概不碰。
+     */
+    private static final java.util.ArrayList<java.lang.ref.WeakReference<View>> sBgOwners
+            = new java.util.ArrayList<>();
+    private static final int BG_OWNERS_MAX = 8;
+
+    /**
+     * ★★★ v0.1.94 总开关：四条热路径（页面挂载 / 播放页重铺 / 回前台 / 武装翻转）是否还作废 View。
+     *
+     * <p>置 {@code false} 的依据见 {@link #repaintLayers}：armed 从未掉过 ⇒ 没有旧命令要清；
+     * 而 invalidate 任何容器都是几十到两百毫秒。真出问题改成 {@code true} 能立刻回到
+     * v0.1.93 的「精确制导作废」行为。
+     */
+    private static final boolean REPAINT_LAYERS_ENABLED = false;
+
+    /** 数一下当前表里有几个活着的 owner（只用于日志，不产生任何副作用）。 */
+    private static int countBgOwners() {
+        int n = 0;
+        try {
+            synchronized (sBgOwners) {
+                for (int i = sBgOwners.size() - 1; i >= 0; i--) {
+                    if (sBgOwners.get(i).get() == null) sBgOwners.remove(i);
+                    else n++;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return n;
+    }
+
+    /** 记录「这块背景归我们管」的 owner View（幂等，重复的不重复加）。 */
+    private static void rememberBgOwner(Drawable d) {
+        try {
+            View v = ownerView(d);
+            if (v == null) return;
+            synchronized (sBgOwners) {
+                for (int i = sBgOwners.size() - 1; i >= 0; i--) {
+                    View o = sBgOwners.get(i).get();
+                    if (o == null) {
+                        sBgOwners.remove(i);          // 顺手清死引用
+                    } else if (o == v) {
+                        return;                        // 已经在表里
+                    }
+                }
+                if (sBgOwners.size() >= BG_OWNERS_MAX) sBgOwners.remove(0);
+                sBgOwners.add(new java.lang.ref.WeakReference<>(v));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * ★★★ v0.1.93：**只作废被接管过的那几个 View**。
+     *
+     * @return 实际作废的个数
+     */
+    private static int repaintBgOwners() {
+        int n = 0;
+        try {
+            synchronized (sBgOwners) {
+                for (int i = sBgOwners.size() - 1; i >= 0; i--) {
+                    View v = sBgOwners.get(i).get();
+                    if (v == null) {
+                        sBgOwners.remove(i);
+                        continue;
+                    }
+                    try {
+                        v.invalidate();
+                        n++;
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return n;
+    }
+
+    /**
+     * ★★★ v0.1.91：**只作废满屏层**的重绘入口（带来源标签）。
+     *
+     * <p>{@link #invalidateTree} 会 DFS 打最多 800 个 View 的 {@code invalidate()}，
+     * 每个 View 的 RenderNode 都要重录 —— 实测一帧 200～280ms。而插件真正画的东西
+     * 只有「满屏底图」那几层。所以凡是<b>非配置变更</b>的重绘都必须走这里。
+     *
+     * <p>为什么轻量够用：display list 是**每个 View 一份**，作废一个容器只会重录它
+     * 自己，子 View 的 display list 仍然复用；而我们钩的 {@code BackgroundDrawable#draw}
+     * 就挂在那些满屏容器/叶子层的绘制过程里。
+     */
+    private static int repaintLayers(View root, String why) {
+        // ★★★ v0.1.94 判据：**稳态下根本不需要作废任何东西**。
+        //
+        //   理由（实测，2.22.2 · 90s × 2 轮）：
+        //   ① 所有 draw 日志的 armed 一直是 1，**从未翻转过** ⇒ 宿主 display list 里
+        //      从来没存过「不透明的旧底色命令」，没有东西需要清。
+        //   ② invalidate 的代价跟被作废 View 的子树规模成正比：作废 ScreenStack 84.6ms、
+        //      作废 DecorView（窗口背景的 owner 就是它）整窗重录 169.7ms、整帧 231.3ms。
+        //      而插件真正画的壁纸是一个常驻独立 View，画一次就固定，重绘它没有任何收益。
+        //   ③ 真需要重画的只有「配置变更」（换图 / 改模糊 / 开关），那条走 applyCfg 整树，
+        //      是一次性用户动作，留着。
+        //
+        //   ⇒ 页面挂载 / 播放页重铺 / 回前台 / 武装翻转 四条热路径一律不作废，只记日志，
+        //     留下「本来会作废几个」这个数值便于回归时观察。
+        if (!REPAINT_LAYERS_ENABLED) {
+            int probe = countBgOwners();
+            sLightRedraws++;
+            if (sDbgRedraw < DBG_REDRAW_BUDGET) {
+                sDbgRedraw++;
+                log("skipRedraw ← " + why + " owner=" + probe + "（全量=" + sFullRedraws
+                        + " 轻量=" + sLightRedraws + "）");
+            }
+            return 0;
+        }
+        // ★★★ v0.1.93：从「按面积挑满屏层」改成「只挑被接管过背景的 View」。
+        //   面积判据会把 ScreenStack 选进来，而它重录一次 80ms+（纯 CPU、子项 0.4ms）。
+        int n = repaintBgOwners();
+        if (n == 0) {
+            // 表还空（还没接管过任何背景：冷启动/刚换页）⇒ 退回满屏层，
+            // 但 ScreenStack 这类容器一律跳过，它重录就是几十毫秒。
+            n = invalidateFullScreenLayers(root, 0, 0);
+        }
+        sLightRedraws++;
+        if (sDbgRedraw < DBG_REDRAW_BUDGET) {
+            sDbgRedraw++;
+            log("lightRedraw ← " + why + " " + n + " 层（全量=" + sFullRedraws
+                    + " 轻量=" + sLightRedraws + "）");
+        }
+        return n;
+    }
+
+    /**
+     * 按面积作废满屏层。★ v0.1.93：<b>跳过 {@code ScreenStack} 这类容器</b>。
+     *
+     * <p>{@code ScreenStack} 的 display list 里压着整棵子树的绘制命令，重录一次实测
+     * 84.6 / 86.0ms，而它自己的子 View 加起来只有 0.4ms —— 作废它纯粹是白烧 CPU，
+     * 且它并不是「我们画底图」的那一层（真正被接管的 View 由
+     * {@link #rememberBgOwner} 精确记录）。宿主类名不受本模块 R8 影响，字面量稳定。
+     */
+    private static int invalidateFullScreenLayers(View v, int depth, int count) {
+        if (v == null || depth > 30 || count >= 20) return count;
+        try {
+            String cn = v.getClass().getSimpleName();
+            if (cn.contains("ScreenStack") || cn.contains("ScreensCoordinatorLayout")) {
+                return count;   // 容器重录几十毫秒、且不归我们画 ⇒ 直接跳过整支
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            int w = v.getWidth();
+            int h = v.getHeight();
+            // 与 {@link #topFullScreenAncestor} 同一套满屏判据：宽 ≥90%、高 ≥50%。
+            if (w > 0 && h > 0 && sSW > 0 && sSH > 0
+                    && (long) w * 100 >= (long) sSW * 90
+                    && (long) h * 100 >= (long) sSH * 50) {
+                v.invalidate();
+                count++;
+            }
+        } catch (Throwable ignored) {
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            int c;
+            try {
+                c = g.getChildCount();
+            } catch (Throwable t) {
+                return count;
+            }
+            for (int i = 0; i < c && count < 20; i++) {
+                try {
+                    count = invalidateFullScreenLayers(g.getChildAt(i), depth + 1, count);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return count;
     }
 
     private static void invalidateTree(View root) {
+        invalidateTree(root, "?");
+    }
+
+    /**
+     * ★★★ v0.1.91：**tag 由调用点自己给**。
+     *   v0.1.90 用调用栈回溯，release 包被 R8 混淆后只能打出 `BgPeel.r0:1`，
+     *   等于没定位到。字符串字面量是 R8 唯一不敢动的锚点 ⇒ 改成传 tag。
+     */
+    private static void invalidateTree(View root, String why) {
         if (root == null) return;
+        // ★★★ v0.1.90 诊断：**记录是谁在整树重绘**（限 40 条）。
+        //   整窗重绘代价是 260ms 级（见 {@link #invalidateFullScreenLayers} 的实测），
+        //   而调用点有 6 处 —— 不把来源钉死，改哪一处都是猜。
+        //   栈只在预算内采集，稳态零开销。
+        if (sDbgRedraw < DBG_REDRAW_BUDGET) {
+            sDbgRedraw++;
+            try {
+                View v = root;
+                String nm = (v.getWidth()) + "x" + (v.getHeight());
+                log("invalidateTree ← " + why + " " + nm
+                        + "（全量=" + (sFullRedraws + 1) + " 轻量=" + sLightRedraws + "）");
+            } catch (Throwable ignored) {
+            }
+        }
+        sFullRedraws++;
         try {
             root.postInvalidateOnAnimation();
         } catch (Throwable ignored) {

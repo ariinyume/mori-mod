@@ -7,7 +7,7 @@
 |---|---|
 | 宿主 | `jp.co.eisys.dlsitesound`（实测 2.22.1） |
 | 模块包名 | `io.github.ariinyume.morimod` |
-| 当前版本 | `0.1.69` / versionCode `10078` |
+| 当前版本 | `0.1.97` / versionCode `10098` |
 | 框架 | libxposed API 102（LSPosed / 现代 Xposed） |
 | 状态 | **持续开发中，暂不发布 Release** |
 

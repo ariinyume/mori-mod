@@ -254,9 +254,10 @@ def main():
     ok("背景替换运行期日志锚点编进包", has("window bg applied: "))
     # ② 「我的字体」清单字段：少了它，字体页那张卡永远是空的。
     ok("我的字体清单字段 f4FontLib 编进包", has("f4FontLib"))
-    # ③ v0.1.10：旧的 f2Transparent（把宿主背景清成透明 ⇒ 整屏发白）已废弃，
-    #    新的「桌面壁纸」来源必须编进包，否则那个按钮点了不会有任何反应。
-    ok("桌面壁纸来源字段 f2DesktopWall 编进包", has("f2DesktopWall"))
+    # ③ v0.1.10：旧的 f2Transparent（把宿主背景清成透明 ⇒ 整屏发白）已废弃。
+    #    ★ r112：旧「桌面壁纸」来源（f2DesktopWall）已整条移除，别再断言它；
+    #    新的「作品封面屏蔽」开关（coverBlock）必须编进包，否则开关点了不会有任何反应。
+    ok("作品封面屏蔽字段 coverBlock 编进包", has("coverBlock"))
     ok("旧的全透明字段仅为兼容保留（仍然可读，便于迁移）", has("f2Transparent"))
 
     # ---- D2. v0.1.0 随包内置字体（SIL OFL 1.1 两款）----
