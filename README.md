@@ -4,13 +4,14 @@
 >
 > 不修改宿主 APK、不影响宿主签名、不联网。
 >
-> 兴趣驱动开发的项目，随时断更跑路。
+> 兴趣驱动开发的项目，薛定谔的稳定性，随时断更跑路。
 
 | | |
 |---|---|
 | 宿主 | `jp.co.eisys.dlsitesound`（实测 2.22.2） |
 | 模块包名 | `io.github.ariinyume.morimod` |
 | 当前版本 | `0.1.97` / versionCode `10098` |
+| 测试设备 | 一加 15 ColorOS 17.0.0.105 |
 | 框架 | libxposed API 102（LSPosed / 现代 Xposed） |
 | 状态 | **持续开发中，暂不发布 Release** |
 
