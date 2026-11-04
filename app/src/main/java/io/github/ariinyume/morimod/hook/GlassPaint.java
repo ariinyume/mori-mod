@@ -99,6 +99,8 @@ final class GlassPaint {
     /**
      * 把这块 drawable 的颜料换成 {@code blur}（一张已经糊好的整屏壁纸）。
      *
+     * @param screenW 本窗口宽（v0.1.98 起是<b>窗口</b>尺寸，不再是屏幕尺寸）
+     * @param screenH 本窗口高
      * @return null = 这条路用不上（找不到 Paint / 位图不可用），调用方照旧
      */
     static Token begin(Drawable d, View v, Rect b, Bitmap blur, int screenW, int screenH) {
@@ -149,13 +151,15 @@ final class GlassPaint {
     }
 
     /**
-     * 建 shader，并把它的坐标系对齐到「这块 drawable 在屏幕上占的那一格」。
+     * 建 shader，并把它的坐标系对齐到「这块 drawable 在<b>窗口</b>里占的那一格」。
      *
-     * <p>对齐只用 {@code getLocationOnScreen()} —— 它把窗口偏移也算进去，
-     * Dialog / Popup 里也准（{@code getLocationInWindow} 在 Dialog 里原点不是屏幕原点，
-     * 这正是 v0.1.40 之前玻璃画到屏幕外的根因）。
+     * <p>★★★ v0.1.98（浮窗割裂 / 移位）：对齐基准从「屏幕」改成「窗口」。
+     * 页面壁纸（{@link BgPeel#paintAligned}）与窗口背景（{@code CoverDrawable}）
+     * 都按<b>本窗口</b>铺图，玻璃必须用同一套基准，否则浮窗下面板里那一块壁纸
+     * 会和背后的壁纸错开（看起来像「玻璃里贴了另一张图」）。
+     * 全屏时窗口原点 ≡ 屏幕原点 ⇒ 这一改动对全屏画面零影响。
      *
-     * <p>Matrix 是「先 cover 缩放，再平移到 (屏幕位置 − 本块位置)」：
+     * <p>Matrix 是「先 cover 缩放，再平移到 (窗口坐标 − 本块位置)」：
      * 本地点 {@code (b.left, b.top)} 恰好落在壁纸的 {@code (offX, offY)} 上 ⇒
      * 透过玻璃看到的就是<b>这块面板背后那一片</b>壁纸，与页面背景严丝合缝。
      */
@@ -170,19 +174,8 @@ final class GlassPaint {
         float vy = 0f;
         try {
             int[] loc = LOC.get();
-            // ★★★ v0.1.43（r14 用户第 2 / 3 条）：**用「去掉位移动画」后的稳定屏幕坐标**。
-            //
-            //   r14 日志铁证：同一块面板同一秒里反复出现
-            //     glassA … scr=0,5454 / 5011 / 4709   ← getLocationOnScreen 含动画
-            //     glassA … top=2286                   ← getLocationInWindow 已在终态
-            //   屏高只有 3168 ⇒ scrY>屏高时 BitmapShader 落到 CLAMP 边缘
-            //   （壁纸底边深色像素）⇒ 用户看到「先深色底，再变成壁纸+模糊」。
-            //   有的面板窗口停在「贴底偏移」态，scrY 一直越界 ⇒「背后一直是深色底」。
-            //
-            //   做法：屏幕坐标减去自身到根的 translationX/Y 累计 —— RN Modal /
-            //   BottomSheet 的滑入几乎都走 translationY；去掉之后得到布局终态位置，
-            //   第一帧玻璃就对准壁纸，不再闪深色。
-            stableScreenLoc(v, loc, sw, sh);
+            // ★★★ v0.1.98：窗口坐标（不再是屏幕坐标），理由见方法头注释。
+            stableWindowLoc(v, loc);
             vx = loc[0];
             vy = loc[1];
         } catch (Throwable ignored) {
@@ -201,13 +194,18 @@ final class GlassPaint {
     }
 
     /**
-     * 面板在屏幕上的「布局终态」位置（去掉 translation / 窗口位移动画）。
+     * 面板在<b>本窗口内</b>的「布局终态」位置（去掉 translation / 滑入动画）。
      *
-     * @param sw 真屏宽（BgPeel 传入）
-     * @param sh 真屏高
+     * <p>★★★ v0.1.98：从 {@code getLocationOnScreen} 换成 {@code getLocationInWindow}。
+     * 老版之所以用屏幕坐标，是因为要「把窗口偏移算进去」；现在壁纸本来就按窗口铺
+     * （见 {@link BgPeel#rootGeometry}），窗口偏移必须<b>排除</b>，否则浮窗下玻璃
+     * 会整体被窗口位置推走一格 —— 正是用户报的「背景割裂 + 移位」。
+     *
+     * <p>仍然要减去自身到根的 translationX/Y 累计：RN Modal / BottomSheet 的滑入
+     * 几乎都走 translationY，不去掉的话第一帧玻璃会跟着动画跑、闪一块深色。
      */
-    static void stableScreenLoc(View v, int[] out, int sw, int sh) {
-        v.getLocationOnScreen(out);
+    static void stableWindowLoc(View v, int[] out) {
+        v.getLocationInWindow(out);
         float tx = 0f;
         float ty = 0f;
         try {
@@ -222,31 +220,6 @@ final class GlassPaint {
         }
         out[0] -= Math.round(tx);
         out[1] -= Math.round(ty);
-        // 窗口整体被 WindowManager 平移时，translation 链上读不到 ——
-        // getLocationOnScreen 仍越界。改用 window 坐标 +「终态窗口原点」：
-        //   · 近全屏 Dialog（rootH ≥ 90% 屏高）终态原点 = (0, 0)
-        //   · 矮窗口终态贴底原点 = (0, sh - rootH)
-        if (sh > 0 && (out[1] < -8 || out[1] >= sh - 4 || out[0] < -8 || out[0] >= sw - 4)) {
-            try {
-                View root = v.getRootView();
-                if (root == null) return;
-                int rh = root.getHeight();
-                int rw = root.getWidth();
-                if (rh <= 0) return;
-                int[] inWin = new int[2];
-                v.getLocationInWindow(inWin);
-                int rootY;
-                if (rh * 100 >= sh * 90) {
-                    rootY = 0;
-                } else {
-                    rootY = Math.max(0, sh - rh);
-                }
-                int rootX = (rw > 0 && rw * 100 < sw * 90) ? Math.max(0, (sw - rw) / 2) : 0;
-                out[0] = rootX + inWin[0];
-                out[1] = rootY + inWin[1];
-            } catch (Throwable ignored) {
-            }
-        }
     }
 
     /** 配置变了（换壁纸 / 关功能）⇒ 丢掉字段缓存（Paint 对象本身不变，只是重新找一遍）。 */

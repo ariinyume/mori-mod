@@ -321,6 +321,14 @@ public final class BgPeel {
 
     /** 绘制用的临时对象（draw 都在 UI 线程，复用避免每帧分配）。 */
     private static final ThreadLocal<int[]> LOC = ThreadLocal.withInitial(() -> new int[2]);
+
+    /**
+     * ★★★ v0.1.98：<b>本层所在窗口的尺寸</b> {@code [w, h]}（每次绘制当场取，不用缓存值）。
+     *
+     * <p>见 {@link #rootGeometry}：壁纸从「铺在屏幕上」改成「铺在窗口上」——
+     * 浮窗 / 分屏 / 自由窗口下窗口不再等于屏幕，缓存值一过期就是错位。
+     */
+    private static final ThreadLocal<int[]> RGEO = ThreadLocal.withInitial(() -> new int[2]);
     private static final ThreadLocal<Rect> SRC = ThreadLocal.withInitial(Rect::new);
     private static final ThreadLocal<RectF> DST = ThreadLocal.withInitial(RectF::new);
     /** v0.1.22：面板圆角裁剪用的 Outline / Path。 */
@@ -2652,9 +2660,22 @@ public final class BgPeel {
                             //     透过播放页看到了下层的作品详情页。所以**无论取不取到位图，
                             //     都至少填一层不透明色**，绝不留洞。
                             int[] loc = LOC.get();
-                            v.getLocationOnScreen(loc);
+                            int[] geo = RGEO.get();
+                            // ★★★ v0.1.98：窗口坐标 + 本窗口尺寸（浮窗下窗口 ≠ 屏幕）。
+                            //   这一层是播放页的满屏 Skia 底，用它铺「屏幕」的话，
+                            //   浮窗里会整体平移 sSW/sSH 与窗口的差 ⇒ 与页面层割裂。
+                            try {
+                                v.getLocationInWindow(loc);
+                            } catch (Throwable ignored) {
+                                loc[0] = 0;
+                                loc[1] = 0;
+                            }
+                            if (!rootGeometry(v, geo)) {
+                                geo[0] = sSW;
+                                geo[1] = sSH;
+                            }
                             Rect dst = new Rect(-loc[0], -loc[1],
-                                    -loc[0] + sSW, -loc[1] + sSH);
+                                    -loc[0] + geo[0], -loc[1] + geo[1]);
                             // ★★★ v0.1.60：满屏 Skia 画布**总是接管**（否则宿主那层会露出来），
                             //   但用哪张底图要按「这一层是不是播放页」来选 ——
                             //   列表页/媒体库用清晰壁纸，播放页用播放档（壁纸+模糊）。
@@ -7134,16 +7155,18 @@ public final class BgPeel {
         //   `inPlayTree` 走「祖先链里有没有满屏氛围底图」这条纯结构事实，
         //   不依赖进度条 ⇒ 那几帧也成立。
         if (inPlayTree(v)) {
-            if (w * 100 >= (long) sSW * 92 && h * 100 >= (long) sSH * 20) {
+            int[] pgeo = RGEO.get();
+            if (rootGeometry(v, pgeo)
+                    && w * 100 >= (long) pgeo[0] * 92 && h * 100 >= (long) pgeo[1] * 20) {
                 int[] gl = new int[2];
                 try {
-                    v.getLocationOnScreen(gl);
-                    GlassPaint.stableScreenLoc(v, gl, sSW, sSH);
+                    // ★★★ v0.1.98：窗口坐标（见 GlassPaint#stableWindowLoc）。
+                    GlassPaint.stableWindowLoc(v, gl);
                 } catch (Throwable ignored) {
                     gl[0] = 0;
                     gl[1] = 0;
                 }
-                if (gl[1] * 100 < (long) sSH * 55) {
+                if (gl[1] * 100 < (long) pgeo[1] * 55) {
                     noteGlassFail("play main " + gl[1]);
                     return false;
                 }
@@ -7216,8 +7239,14 @@ public final class BgPeel {
         //   高斯模糊、播放页封面区出现色块/深色条。位置都读不对，就别动它的底。
         try {
             int[] loc = LOC.get();
-            v.getLocationOnScreen(loc);
-            if (loc[0] < -w || loc[0] >= sSW || loc[1] > sSH * 3) {
+            int[] geo = RGEO.get();
+            // ★★★ v0.1.98：这道「位置不可信」的闸也换成窗口坐标。
+            //   老写法拿屏幕坐标跟 sSW（主窗口宽）比 —— 浮窗里窗口在屏幕右侧
+            //   ⇒ loc[0] 必然 ≥ sSW ⇒ 所有面板都被判成 offscreen-window，
+            //   玻璃整片消失（比错位更糟）。
+            if (!rootGeometry(v, geo)) return false;
+            v.getLocationInWindow(loc);
+            if (loc[0] < -w || loc[0] >= geo[0] || loc[1] > geo[1] * 3) {
                 glassNo("offscreen-window", v, w, h);
                 return false;
             }
@@ -7315,7 +7344,16 @@ public final class BgPeel {
             noteGlassFail("bmp");
             return null;
         }
-        GlassPaint.Token tk = GlassPaint.begin(d, v, b, g, sSW, sSH);
+        // ★★★ v0.1.98：宽高传<b>本窗口</b>尺寸（不是 sSW/sSH 缓存）——
+        //   浮窗里窗口 ≠ 屏幕，用缓存值就等于把玻璃按屏幕铺。
+        int[] rgeo = RGEO.get();
+        int gw = sSW;
+        int gh = sSH;
+        if (rootGeometry(v, rgeo)) {
+            gw = rgeo[0];
+            gh = rgeo[1];
+        }
+        GlassPaint.Token tk = GlassPaint.begin(d, v, b, g, gw, gh);
         if (tk == null) {
             noteGlassFail("paint");
             return null;
@@ -7332,18 +7370,21 @@ public final class BgPeel {
             int x = -1;
             int y = -1;
             int rawY = -1;
+            int[] wgeo = RGEO.get();
             try {
-                v.getLocationOnScreen(loc);
+                v.getLocationInWindow(loc);
                 rawY = loc[1];
-                GlassPaint.stableScreenLoc(v, loc, sSW, sSH);
+                GlassPaint.stableWindowLoc(v, loc);
                 x = loc[0];
                 y = loc[1];
             } catch (Throwable ignored) {
             }
+            boolean geoOk = rootGeometry(v, wgeo);
             log("glassA -> " + name(v) + " " + b.width() + "x" + b.height()
-                    + " scr=" + x + "," + y
+                    + " win=" + x + "," + y
                     + (rawY != y ? " rawY=" + rawY : "")
                     + " b=" + b.left + "," + b.top
+                    + " root=" + (geoOk ? wgeo[0] + "x" + wgeo[1] : "?")
                     + " sh=1 bmp=" + g.getWidth() + "x" + g.getHeight());
         }
         hit("glassA -> ", v, b);
@@ -8548,10 +8589,14 @@ public final class BgPeel {
             int h = v.getHeight();
             if (w <= 0 || h <= 0) return false;
             int[] loc = LOC.get();
-            v.getLocationOnScreen(loc);
+            int[] geo = RGEO.get();
+            // ★★★ v0.1.98：窗口坐标 + 本窗口尺寸 —— 浮窗下用屏幕坐标会把
+            //   「窗口在屏幕右侧」误判成「在窗口外」⇒ 那一层被当成离屏页跳过。
+            v.getLocationInWindow(loc);
+            if (!rootGeometry(v, geo)) return true;
             int x = loc[0];
             int y = loc[1];
-            return x + w > 0 && y + h > 0 && x < sSW && y < sSH;
+            return x + w > 0 && y + h > 0 && x < geo[0] && y < geo[1];
         } catch (Throwable t) {
             return false;
         }
@@ -8659,10 +8704,45 @@ public final class BgPeel {
     }
 
     /**
-     * ★ 所有层共用的绘制：把位图铺在<b>屏幕坐标系</b>上，再用这一层自己的范围裁剪。
+     * ★★★ v0.1.98：<b>本层所在窗口的宽高</b>（当场取，不用 {@link #sSW}/{@link #sSH} 缓存）。
      *
-     * <p>Canvas 在 {@code View#draw} 里已经被平移到该 View 的左上角，所以「屏幕矩形」
-     * 在本地坐标里就是 {@code (-locX, -locY, ...)}。不论哪一层、尺寸差多少，
+     * <h3>为什么必须当场取</h3>
+     * 浮窗 / 分屏 / 自由窗口（Android 自由窗口、ROM 小窗）下，窗口尺寸会在<b>任意时刻</b>变，
+     * 而 {@link #apply} 的度量刷新只有 1.5 秒一轮轮询。以前每一层都按缓存的
+     * {@code sSW×sSH} 算落点 ⇒ 窗口刚缩小的那几帧里，先重绘的层用新尺寸、
+     * 还没重绘的层用旧尺寸 ⇒ 同一屏出现两块缩放/偏移都不同的壁纸 = 用户说的「割裂」。
+     * 现在每层都读自己窗口的实时尺寸，任何一帧各层都对得上。
+     *
+     * <p>拿不到尺寸（未 attach）时回落到缓存值，绝不因此不画（不画就是透明 / 黑块）。
+     *
+     * @return false = 连缓存值都没有，调用方应当放弃本帧
+     */
+    private static boolean rootGeometry(View v, int[] out) {
+        int w = 0;
+        int h = 0;
+        try {
+            View r = v == null ? null : v.getRootView();
+            if (r != null) {
+                w = r.getWidth();
+                h = r.getHeight();
+            }
+        } catch (Throwable ignored) {
+        }
+        if (w <= 0 || h <= 0) {
+            w = sSW;
+            h = sSH;
+        }
+        if (w <= 0 || h <= 0) return false;
+        out[0] = w;
+        out[1] = h;
+        return true;
+    }
+
+    /**
+     * ★ 所有层共用的绘制：把位图铺在<b>本窗口</b>上，再用这一层自己的范围裁剪。
+     *
+     * <p>Canvas 在 {@code View#draw} 里已经被平移到该 View 的左上角，所以「窗口矩形」
+     * 在本地坐标里就是 {@code (-locX, -locY, w, h)}。不论哪一层、尺寸差多少，
      * 画出来的都是<b>同一份像素</b> ⇒ 叠多少层都严丝合缝（修 v0.1.16 的重影）。
      *
      * <p>⚠️ 只用 {@code drawBitmap}，<b>不碰 Drawable 实例</b> —— 同一个实例可能同时挂在
@@ -8680,13 +8760,22 @@ public final class BgPeel {
         //   本轮在下面对 dst 做<b>真正的 scale 补偿</b>（见 {@link #canvasScale}），
         //   壁纸在整个转场里都钉死在屏幕上 ⇒ 错位从根上不存在，降级自然多余。
         int[] loc = LOC.get();
+        int[] geo = RGEO.get();
         try {
-            // ★★★ v0.1.41（r12 证据 A）：**改用 getLocationOnScreen**。
-            //   getLocationInWindow 给的是「本窗口内坐标」，而信息面板跑在独立 Dialog
-            //   窗口里（r12 日志 top=280）⇒ 位图整体被推离面板，再被 clipRect 裁干净，
-            //   而 drawBitmap 画在裁剪区外不抛异常 ⇒ 静默成功 ⇒ 面板整块消失。
-            //   主窗口 windowLeft/Top 恒为 0 ⇒ 这一改对主界面 / 底栏 / 迷你播放零影响。
-            v.getLocationOnScreen(loc);
+            // ★★★ v0.1.98（浮窗割裂 / 移位的定案改动）：**坐标基准从「屏幕」改成「窗口」**。
+            //
+            //   老做法：locations 用 getLocationOnScreen（含窗口在屏幕上的偏移），
+            //   目标矩形用 sSW×sSH（主窗口尺寸）⇒ 壁纸铺的是「整块屏幕」，
+            //   窗口只是它上面开的一个洞。全屏时窗口 ≡ 屏幕，看不出问题；
+            //   一旦进浮窗（窗口在屏幕 (x0,y0)、尺寸只有半屏），
+            //      · 每一层画的是「壁纸在屏幕坐标里的那一片」，落点随 loc 整体平移 ⇒ 移位；
+            //      · 不同层 loc 不同，同一屏里各画各的一片 ⇒ 交界处图案对不上 ⇒ 割裂；
+            //      · 而窗口背景 CoverDrawable 是按 bounds（窗口）居中等比裁的，两套基准互不相干。
+            //   getLocationInWindow 天然给出「本窗口内的坐标」，配上本窗口的宽高，
+            //   所有层（含 Dialog 自己的窗口）都落在同一套窗口坐标里，
+            //   与 DecorView 上的 CoverDrawable 逐像素同源 ⇒ 结构上不可能再割裂。
+            v.getLocationInWindow(loc);
+            if (!rootGeometry(v, geo)) return false;
         } catch (Throwable t) {
             return false;
         }
@@ -8711,7 +8800,7 @@ public final class BgPeel {
         //   父层再乘回 scale ⇒ 落点与尺寸都与屏幕严格对齐，全程钉死不动。
         float cs = canvasScale(v);
         float inv = 1f / cs;
-        RectF dst = coverRect(bmp, -loc[0] * inv, -loc[1] * inv, sSW * inv, sSH * inv);
+        RectF dst = coverRect(bmp, -loc[0] * inv, -loc[1] * inv, geo[0] * inv, geo[1] * inv);
         Rect src = SRC.get();
         src.set(0, 0, bmp.getWidth(), bmp.getHeight());
         int save = c.save();
@@ -8732,11 +8821,9 @@ public final class BgPeel {
      *
      * <h3>和 {@link #paintAligned} 的唯一差别</h3>
      * <ul>
-     *   <li>位置来源：这里用 {@code getLocationOnScreen()}（把窗口偏移算进去，
-     *       Dialog / Popup 里也准）；{@code paintAligned} 用的是
-     *       {@code getLocationInWindow()}（Dialog 窗口原点是窗口自己的 0，不是屏幕 0）。</li>
      *   <li>裁剪：这里的 {@code clip} 是<b>本层局部矩形</b> {@code (0,0,w,h)}，
-     *       不是屏幕矩形 ⇒ 位图不可能被推到裁剪区外。</li>
+     *       不是整窗矩形 ⇒ 位图不可能被推到裁剪区外。</li>
+     *   <li>（v0.1.98 起两者位置来源统一：{@code getLocationInWindow()} + 本窗口尺寸。）</li>
      * </ul>
      *
      * <p>为什么这一条能吃掉「面板整块消失」：老路径里 {@code dst} 由 {@code -loc} 算出，
@@ -8750,15 +8837,18 @@ public final class BgPeel {
         }
         if (clip == null || clip.isEmpty()) return false;
         int[] loc = LOC.get();
+        int[] geo = RGEO.get();
         try {
-            v.getLocationOnScreen(loc);
+            // ★★★ v0.1.98：与 {@link #paintAligned} 同一条改动 —— 窗口坐标 + 本窗口尺寸。
+            v.getLocationInWindow(loc);
+            if (!rootGeometry(v, geo)) return false;
         } catch (Throwable t) {
             return false;
         }
         // ★★★ v0.1.72（r74）：和 {@link #paintAligned} 同一条修正 —— 转场缩放要除掉。
         float cs = canvasScale(v);
         float inv = 1f / cs;
-        RectF dst = coverRect(bmp, -loc[0] * inv, -loc[1] * inv, sSW * inv, sSH * inv);
+        RectF dst = coverRect(bmp, -loc[0] * inv, -loc[1] * inv, geo[0] * inv, geo[1] * inv);
         Rect src = SRC.get();
         src.set(0, 0, bmp.getWidth(), bmp.getHeight());
         int save = c.save();
@@ -8857,13 +8947,17 @@ public final class BgPeel {
     private static void drawMask(Canvas c, View v, Rect clip) {
         if (MASK_PAINT.getAlpha() <= 0) return;
         int[] loc = LOC.get();
+        int[] geo = RGEO.get();
         try {
+            // ★★★ v0.1.98：跟着 wallpaper 一起改成窗口坐标 + 本窗口尺寸，
+            //   否则浮窗里「壁纸在窗口坐标、压暗层在屏幕坐标」⇒ 压暗块整体错位。
             v.getLocationInWindow(loc);
+            if (!rootGeometry(v, geo)) return;
         } catch (Throwable t) {
             return;
         }
         RectF dst = DST.get();
-        dst.set(-loc[0], -loc[1], -loc[0] + sSW, -loc[1] + sSH);
+        dst.set(-loc[0], -loc[1], -loc[0] + geo[0], -loc[1] + geo[1]);
         int save = c.save();
         try {
             c.clipRect(clip);
@@ -9200,6 +9294,12 @@ public final class BgPeel {
         MoriConfig cfg = RemoteConfig.get();
         Bitmap bmp = FeatureF2.wallpaperBitmap(cfg);
         boolean want = FeatureF2.hasWallpaper(cfg);
+        // ★★★ v0.1.98：**几何先取**。浮窗缩放 / 全屏↔浮窗 / 旋转 / 分屏都只体现为
+        //   「DecorView 尺寸变了」，而各层的壁纸落点是录在 display list 里的常量：
+        //   不重新录，尺寸变了画面上还是旧落点 ⇒ 「拉大到全屏依旧移位」。
+        //   放在最前面，是为了让下面任何一条分支（含 armed 抖动）都不会漏掉它。
+        View decNow = decorOf(a);
+        boolean geoChanged = updateMetrics(decNow);
         // ★★ v0.1.25 用户第 4 条「播放页有时候底色透明」：
         //   `wallpaperBitmap` 在「配置刚变 / 解码还没回来」时会返回 null，
         //   以前直接 `ready = want && bmp != null` ⇒ armed 掉成 false ⇒ 所有绘制分支都放弃
@@ -9234,7 +9334,7 @@ public final class BgPeel {
         }
         // ★ v0.1.90：把「配置真的变了」和「武装状态翻转」分开 —— 两者的代价差 40 倍。
         boolean cfgDirty = sDirty;
-        boolean changed = (ready != sArmed) || cfgDirty;
+        boolean changed = (ready != sArmed) || cfgDirty || (geoChanged && ready);
         sArmed = ready;
         sWpBmp = ready ? use : null;
         sWpBarBmp = ready ? FeatureF2.barBitmap(cfg) : null;
@@ -9253,7 +9353,9 @@ public final class BgPeel {
         //   触发 retintTree 把整棵树重新染色，肉眼看到的就是颜色闪）。
         AccentColor.update(use, cfg);
 
-        updateMetrics(decorOf(a));
+        // ★★★ v0.1.98：把这个窗口挂上「尺寸变化」监听 —— 轮询要等 1.5 秒，
+        //   而用户缩放浮窗是即时的：靠轮询就会出现「缩完一秒多才归位」。
+        watchGeometry(decNow);
         // ★★★ v0.1.76（r79 第 1 条）：**不再在 apply() 里充满重绘额度。**
         //   apply 会在切页面 / 配置变化时触发，额度被反复充满 ⇒ 心跳每 150ms 都有活干
         //   （invalidateTree 一棵<b>藏在迷你条后面</b>的播放页子树）——
@@ -9269,10 +9371,17 @@ public final class BgPeel {
             //     否则各层 RenderNode 里还留着旧底图；
             //   · 只是 armed 翻转 ⇒ 插件画的东西只有「满屏底图」那几层，
             //     整树重绘会把首页 3 排横向列表（几百个 View）一起作废，实测 261ms。
-            View dec = decorOf(a);
+            View dec = decNow != null ? decNow : decorOf(a);
             if (cfgDirty) {
                 // 计数在 invalidateTree 里统一做
                 invalidateTree(dec, "applyCfg");
+            } else if (geoChanged) {
+                // ★★★ v0.1.98：**窗口尺寸变了就必须整窗重录**。
+                //   浮窗拖动缩放的每一帧、以及「浮窗 → 全屏」，各层的壁纸落点都变了；
+                //   而落点是录在 display list 里的常量，不重录就一直是旧落点
+                //   ⇒ 用户看到的「拉大到全屏依旧移位，只有前后台切换才恢复」。
+                //   这是一次性事件（尺寸稳定后不再触发），不是热路径。
+                invalidateTree(dec, "applyGeo");
             } else {
                 repaintLayers(dec, "armFlip");
             }
@@ -9293,14 +9402,20 @@ public final class BgPeel {
         maybeSummary();
     }
 
-    /** 刷新屏幕尺寸与各项像素门槛（每轮一次，旋转 / 分屏也能跟上）。 */
-    private static void updateMetrics(View decor) {
+    /**
+     * 刷新屏幕尺寸与各项像素门槛（每轮一次，旋转 / 分屏也能跟上）。
+     *
+     * @return true = 窗口尺寸<b>真的变了</b>（浮窗缩放 / 旋转 / 分屏 / 全屏↔浮窗）
+     *         ⇒ 上层必须让视图树重录一遍，否则各层 display list 里还存着旧尺寸下
+     *         算出来的壁纸落点 —— 这正是「拉大到全屏依旧移位，只有前后台切换才恢复」。
+     */
+    private static boolean updateMetrics(View decor) {
         try {
             if (decor == null) {
                 sMinArea = Long.MAX_VALUE;
                 sSW = 0;
                 sSH = 0;
-                return;
+                return false;
             }
             int rw = decor.getWidth();
             int rh = decor.getHeight();
@@ -9308,8 +9423,9 @@ public final class BgPeel {
                 sMinArea = Long.MAX_VALUE;
                 sSW = 0;
                 sSH = 0;
-                return;
+                return false;
             }
+            boolean geo = sSW > 0 && sSH > 0 && (rw != sSW || rh != sSH);
             sSW = rw;
             sSH = rh;
             sMinArea = (long) (FULL_SCREEN_RATIO * rw * rh);
@@ -9318,10 +9434,83 @@ public final class BgPeel {
             sEdgeBottom = (int) (EDGE_BOTTOM_DP * d);
             sBarMaxH = (int) (BAR_MAX_H_DP * d);
             sFullW = (int) (FULL_W_RATIO * rw);
+            return geo;
         } catch (Throwable t) {
             sMinArea = Long.MAX_VALUE;
+            return false;
         }
     }
+
+    // ── ★★★ v0.1.98：窗口尺寸变化（浮窗 / 分屏 / 旋转）──────────────────
+
+    /** 已经挂过「尺寸监听」的 DecorView（主窗口只有一个）。 */
+    private static volatile View sGeoWatch;
+
+    /** 尺寸变化触发的重绘次数（诊断用）。 */
+    private static volatile int sGeoRedraws;
+
+    /**
+     * 给主窗口挂一个 {@code OnLayoutChangeListener}：<b>尺寸一变就立刻刷度量</b>。
+     *
+     * <p>为什么不能只靠 {@link #POLL_MS} 的轮询：用户把浮窗拉大 / 缩小时，
+     * 画面在 1.5 秒内会一直按旧尺寸铺壁纸 —— 那就是「割裂」最刺眼的一段。
+     * 监听是宿主自己回调的，零轮询代价，且只在真的改了尺寸时才做事。
+     */
+    private static void watchGeometry(final View decor) {
+        if (decor == null || decor == sGeoWatch) return;
+        sGeoWatch = decor;
+        try {
+            decor.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+                @Override
+                public void onLayoutChange(View v, int l, int t, int r, int b,
+                                           int ol, int ot, int or, int ob) {
+                    // 纯位移（拖浮窗）不用重画：壁纸按窗口铺，窗口挪了坐标基准不变。
+                    if ((r - l) == (or - ol) && (b - t) == (ob - ot)) return;
+                    onWindowResized(v);
+                }
+            });
+            log("geo watch on " + decor.getWidth() + "x" + decor.getHeight());
+        } catch (Throwable t) {
+            log("geo watch FAILED: " + t);
+        }
+    }
+
+    /** 窗口尺寸真的变了：刷新度量，并把「重绘」合并成尺寸稳定后的一次。 */
+    private static void onWindowResized(View decor) {
+        try {
+            int w = decor == null ? 0 : decor.getWidth();
+            int h = decor == null ? 0 : decor.getHeight();
+            if (w <= 0 || h <= 0) return;
+            if (!updateMetrics(decor)) return;      // 尺寸没变（可能只是 padding 抖动）
+            if (!sArmed) return;                    // 没在画壁纸，不用管
+            MAIN.removeCallbacks(GEO_REPAINT);
+            MAIN.postDelayed(GEO_REPAINT, 60L);     // 连续缩放时合并成最后一次
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 尺寸稳定后重录一次视图树。
+     *
+     * <p>⚠️ 必须走 {@link #invalidateTree}（全量）：轻量路径
+     * {@code REPAINT_LAYERS_ENABLED=false} 时什么都不作废，而这里<b>所有</b>
+     * 铺过壁纸的层都存着旧尺寸的落点，只作废一两个是不够的。
+     */
+    private static final Runnable GEO_REPAINT = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                View d = sGeoWatch;
+                if (d == null) d = decorOf(sPoll);
+                if (d == null) return;
+                sGeoRedraws++;
+                log("geo redraw " + d.getWidth() + "x" + d.getHeight()
+                        + " #" + sGeoRedraws);
+                invalidateTree(d, "geoLayout");
+            } catch (Throwable ignored) {
+            }
+        }
+    };
 
     /**
      * 登记一层「满屏」View（每个类只打一次，最多 {@link #BIG_LOG_BUDGET} 行）。

@@ -259,14 +259,20 @@ A("路径 A：反射取 BackgroundDrawable 那支 Paint，把 shader 换成模�
   and "static Token begin(" in GP)
 A("换颜料必须还原（否则这支 Paint 带着 shader 去画别的东西）",
   "static void end(Token tk)" in GP and "tk.paint.setShader(tk.prevShader);" in GP)
-A("shader 对齐用 getLocationOnScreen（Dialog 里 getLocationInWindow 原点不是屏幕原点）",
-  "v.getLocationOnScreen(out);" in GP and "stableScreenLoc(v, loc, sw, sh);" in GP)
-A("★ v0.1.43：shader 坐标先去掉位移动画，拿到「布局终态」屏幕位置（面板第一帧就对上壁纸）",
-  "static void stableScreenLoc(View v, int[] out, int sw, int sh)" in GP
+A("★★ v0.1.98：shader 对齐改用 getLocationInWindow（壁纸按「窗口」铺，浮窗/分屏不再错位）",
+  "v.getLocationInWindow(out);" in GP and "stableWindowLoc(v, loc);" in GP)
+A("★ v0.1.43 / v0.1.98：shader 坐标先去掉位移动画，拿到「布局终态」窗口位置（面板第一帧就对上壁纸）",
+  "static void stableWindowLoc(View v, int[] out)" in GP
   and "tx += cur.getTranslationX();" in GP and "ty += cur.getTranslationY();" in GP
   and "out[0] -= Math.round(tx);" in GP and "out[1] -= Math.round(ty);" in GP)
-A("★ v0.1.43：终态坐标仍越界时按「窗口终态原点」兜底（近全屏=>0,0；矮窗口=>贴底）",
-  "if (rh * 100 >= sh * 90) {" in GP and "rootY = Math.max(0, sh - rh);" in GP)
+A("★★ v0.1.98：壁纸坐标基准 = 本窗口（paintAligned 用 getLocationInWindow + rootGeometry）",
+  "v.getLocationInWindow(loc);" in bg
+  and "private static boolean rootGeometry(View v, int[] out)" in bg
+  and "geo[0] * inv, geo[1] * inv" in bg)
+A("★★ v0.1.98：窗口尺寸变化必须整窗重录（否则「拉大到全屏仍移位」）",
+  "private static boolean updateMetrics(View decor)" in bg
+  and 'invalidateTree(dec, "applyGeo");' in bg
+  and "addOnLayoutChangeListener" in bg)
 A("玻璃表面的唯一落点 = glassToken()：只换 shader，然后照常 chain.proceed()",
   "private static GlassPaint.Token glassToken(Drawable d)" in bg
   and "GlassPaint.Token tk = glassToken((Drawable) self);" in bg)
