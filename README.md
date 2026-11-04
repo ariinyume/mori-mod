@@ -1,8 +1,8 @@
-# MoriMod · DLsiteSound 美化模块
+# MoriMod · DLsiteSound 美化 / 功能优化模块
 
-> 一个 LSPosed / Xposed 模块，为 **DLsiteSound** 提供自定义背景、强调色、毛玻璃面板与字体替换（或者其他什么梦到的功能）。
+> 一个 LSPosed / Xposed 模块，为 **DLsiteSound** 提供自定义背景、强调色、毛玻璃面板与字体替换等功能（或者其他什么梦到的功能）。
 >
-> 不修改宿主 APK、不影响宿主签名、不联网。
+> 不修改宿主 APK、不影响宿主签名、不联网、不采集用户信息。
 >
 > 兴趣驱动开发的项目，薛定谔的稳定性，随时断更跑路。
 
