@@ -58,6 +58,9 @@ internal abstract class MoriStrings {
     abstract val ITEM_LAYOUT: String
     abstract val ITEM_COVER_BLOCK: String
     abstract val ITEM_COVER_BLOCK_SUM: String
+    /** 切歌/切轨卡顿优化（实验性）**总开关**：这条线上的所有改动都挂在它下面。 */
+    abstract val ITEM_PERF: String
+    abstract val ITEM_PERF_SUM: String
     abstract val ITEM_HIDE_ICON: String
     abstract val ITEM_DEBUG_LOG: String
     abstract val ITEM_DEBUG_LOG_SUM: String
@@ -218,6 +221,8 @@ internal abstract class MoriStrings {
 
     /** 列表项右侧的「待开发」小标签（比 toast 更早被看见，避免用户以为功能坏了）。 */
     abstract val TAG_WIP: String
+    /** 「实验性」小标签：开了会改变宿主行为，且不保证在所有机型上都好看。 */
+    abstract val TAG_EXPERIMENTAL: String
     abstract val TOAST_GLASS_SAVED: String
     abstract val TOAST_DEFAULT_RESTORED: String
     /** 删掉了正在使用的背景图 ⇒ 已自动恢复宿主默认。 */
@@ -260,6 +265,8 @@ internal object ZhCn : MoriStrings() {
     override val ITEM_LAYOUT = "主页模块布局调整"
     override val ITEM_COVER_BLOCK = "作品封面屏蔽"
     override val ITEM_COVER_BLOCK_SUM = "全页面不显示作品封面，位置仍可点击"
+    override val ITEM_PERF = "切换音轨卡顿优化"
+    override val ITEM_PERF_SUM = "实验性。当前只采集绘制诊断数据，暂不改变宿主表现"
     override val ITEM_HIDE_ICON = "隐藏模块桌面图标"
     override val ITEM_DEBUG_LOG = "调试日志"
     override val ITEM_DEBUG_LOG_SUM = "默认关闭，打开后写入 LSPosed 日志"
@@ -396,6 +403,7 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_REQUIRES_HOST = "请先打开 DLsiteSound 再试"
     override val TOAST_RESERVED = "待开发功能，请等待更新"
     override val TAG_WIP = "待开发"
+    override val TAG_EXPERIMENTAL = "实验性"
     override val TOAST_GLASS_SAVED = "液态玻璃为第二批功能，偏好已记录"
     override val TOAST_DEFAULT_RESTORED = "已恢复宿主默认"
     override val TOAST_BG_RESTORED = "已恢复为宿主默认背景"
@@ -436,6 +444,8 @@ internal object ZhTw : MoriStrings() {
     override val ITEM_LAYOUT = "首頁模組版面調整"
     override val ITEM_COVER_BLOCK = "作品封面屏蔽"
     override val ITEM_COVER_BLOCK_SUM = "全頁面不顯示作品封面，位置仍可點擊"
+    override val ITEM_PERF = "切換音軌卡頓最佳化"
+    override val ITEM_PERF_SUM = "實驗性。目前只蒐集繪製診斷資料，暫不改變宿主表現"
     override val ITEM_HIDE_ICON = "隱藏模組桌面圖示"
     override val ITEM_DEBUG_LOG = "除錯日誌"
     override val ITEM_DEBUG_LOG_SUM = "預設關閉，開啟後寫入 LSPosed 日誌"
@@ -572,6 +582,7 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_REQUIRES_HOST = "請先開啟 DLsiteSound 再試"
     override val TOAST_RESERVED = "待開發功能，請等待更新"
     override val TAG_WIP = "待開發"
+    override val TAG_EXPERIMENTAL = "實驗性"
     override val TOAST_GLASS_SAVED = "液態玻璃為第二批功能，偏好已記錄"
     override val TOAST_DEFAULT_RESTORED = "已還原宿主預設"
     override val TOAST_BG_RESTORED = "已還原為宿主預設背景"
@@ -612,6 +623,8 @@ internal object En : MoriStrings() {
     override val ITEM_LAYOUT = "Home layout"
     override val ITEM_COVER_BLOCK = "Blur work covers"
     override val ITEM_COVER_BLOCK_SUM = "Hide cover art everywhere; the area stays tappable"
+    override val ITEM_PERF = "Track-switch stutter"
+    override val ITEM_PERF_SUM = "Experimental. Currently only collects draw diagnostics — no visible change yet"
     override val ITEM_HIDE_ICON = "Hide launcher icon"
     override val ITEM_DEBUG_LOG = "Debug log"
     override val ITEM_DEBUG_LOG_SUM = "Off by default; writes to the LSPosed log"
@@ -748,6 +761,7 @@ internal object En : MoriStrings() {
     override val TOAST_REQUIRES_HOST = "Open DLsiteSound first"
     override val TOAST_RESERVED = "Not available yet — please wait for an update"
     override val TAG_WIP = "Coming soon"
+    override val TAG_EXPERIMENTAL = "BETA"
     override val TOAST_GLASS_SAVED = "Liquid glass arrives in the second batch; preference saved"
     override val TOAST_DEFAULT_RESTORED = "Restored host default"
     override val TOAST_BG_RESTORED = "Restored host default background"

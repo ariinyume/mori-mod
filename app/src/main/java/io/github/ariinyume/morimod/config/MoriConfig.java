@@ -190,6 +190,28 @@ public final class MoriConfig {
     // ── F5 主页布局（第二批 v1.1）───────────────────────────────────
     public boolean f5Enabled = false;
 
+    // ── 性能实验：切换音轨卡顿优化（v0.1.99）─────────────────────────
+    /**
+     * 「切换音轨卡顿优化（实验性）」**总开关**。
+     *
+     * <h3>为什么是一个总开关，而不是每项一个</h3>
+     * 切歌/切轨卡顿这条线上后续会有一串改动（诊断探针 → 动画层独立 RenderNode →
+     * duration 缓存 → 切歌窗口降载）。它们全都是「给宿主渲染管线打补丁」，
+     * 单独开关会让用户面对五六个看不懂的旋钮，也让我们自己很难回答
+     * 「到底是哪一项让画面变怪了」。所以这里只暴露**一个**开关：
+     * <b>开 = 这一整套实验改动整体生效；关 = 一项都不许调起。</b>
+     *
+     * <h3>「关闭时禁止调起」是硬约束，不是口号</h3>
+     * 能力层（{@code hook/PerfProbe} 及后续）在这个字段为 false 时
+     * <b>连 hook 都不注册</b>（见 {@code PerfProbe#apply}）—— 不是「注册了再在方法体里 return」。
+     * 后者在热路径上仍然付出了被拦截的代价，而这条线动的恰恰是绘制/失效这种每秒上万次调用的地方。
+     * 已经注册的 hook 在开关被关掉时由方法体首行的 volatile 判断立刻停手，
+     * 因为 libxposed 的 hook 无法安全撤销（{@code deoptimize} 只是还原解释执行，不等于解挂）。
+     *
+     * <p>默认 false：这是实验功能，用户没主动打开就绝不应该有任何行为变化。
+     */
+    public boolean perfSwitch = false;
+
     // ── 界面偏好 ─────────────────────────────────────────────────────
     /** 设置页语言：zh-CN | zh-TW | en。 */
     public String lang = "zh-CN";
@@ -253,6 +275,7 @@ public final class MoriConfig {
         c.f4FontLib.clear();
         c.f4FontLib.addAll(f4FontLib);
         c.f5Enabled = f5Enabled;
+        c.perfSwitch = perfSwitch;
         c.lang = lang; c.hideLauncherIcon = hideLauncherIcon;
         c.debugLog = debugLog;
         c.activeProfileId = activeProfileId;
@@ -346,6 +369,7 @@ public final class MoriConfig {
             for (String p : f4FontLib) lib.put(p);
             o.put("f4FontLib", lib);
             o.put("f5Enabled", f5Enabled);
+            o.put("perfSwitch", perfSwitch);
             o.put("lang", lang);
             o.put("hideLauncherIcon", hideLauncherIcon);
             o.put("debugLog", debugLog);
@@ -409,6 +433,7 @@ public final class MoriConfig {
                 }
             }
             c.f5Enabled = o.optBoolean("f5Enabled", false);
+            c.perfSwitch = o.optBoolean("perfSwitch", false);
             c.lang = o.optString("lang", "zh-CN");
             c.hideLauncherIcon = o.optBoolean("hideLauncherIcon", false);
             c.debugLog = o.optBoolean("debugLog", false);
@@ -472,6 +497,7 @@ public final class MoriConfig {
                 + " F4=" + f4Enabled + "(fam=" + (f4FontFamily.isEmpty() ? "-" : f4FontFamily)
                 + ",file=" + (f4FontFile.isEmpty() ? "none" : "set") + ")"
                 + " lang=" + lang + " hideIcon=" + hideLauncherIcon
+                + " perf=" + perfSwitch
                 + " media=" + mediaPool.size() + " names=" + namePool.size();
     }
 }

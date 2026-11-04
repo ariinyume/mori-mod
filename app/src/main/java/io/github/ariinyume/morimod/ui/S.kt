@@ -41,6 +41,8 @@ internal object S {
     val ITEM_LAYOUT get() = s.ITEM_LAYOUT
     val ITEM_COVER_BLOCK get() = s.ITEM_COVER_BLOCK
     val ITEM_COVER_BLOCK_SUM get() = s.ITEM_COVER_BLOCK_SUM
+    val ITEM_PERF get() = s.ITEM_PERF
+    val ITEM_PERF_SUM get() = s.ITEM_PERF_SUM
     val ITEM_HIDE_ICON get() = s.ITEM_HIDE_ICON
     val ITEM_DEBUG_LOG get() = s.ITEM_DEBUG_LOG
     val ITEM_DEBUG_LOG_SUM get() = s.ITEM_DEBUG_LOG_SUM
@@ -175,6 +177,7 @@ internal object S {
     val TOAST_REQUIRES_HOST get() = s.TOAST_REQUIRES_HOST
     val TOAST_RESERVED get() = s.TOAST_RESERVED
     val TAG_WIP get() = s.TAG_WIP
+    val TAG_EXPERIMENTAL get() = s.TAG_EXPERIMENTAL
     val TOAST_GLASS_SAVED get() = s.TOAST_GLASS_SAVED
     val TOAST_DEFAULT_RESTORED get() = s.TOAST_DEFAULT_RESTORED
     val TOAST_BG_RESTORED get() = s.TOAST_BG_RESTORED

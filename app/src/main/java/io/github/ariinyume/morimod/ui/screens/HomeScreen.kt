@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Construction
@@ -141,10 +142,10 @@ internal fun HomeScreen(
         item { SectionHeader(S.SEC_FEATURES) }
         item {
             ConnectedItems(
-                count = 5,
+                count = 6,
                 modifier = Modifier.padding(horizontal = Space.ScreenH),
             ) { i ->
-                val shape = connectedItemShape(i, 5)
+                val shape = connectedItemShape(i, 6)
                 when (i) {
                     0 -> MoriListItem(
                         icon = Icons.Rounded.Image,
@@ -176,7 +177,7 @@ internal fun HomeScreen(
                         trailing = { WipTag() },
                     )
                     // ★ r112 用户第 2 条：作品封面屏蔽
-                    else -> MoriListItem(
+                    4 -> MoriListItem(
                         icon = Icons.Rounded.VisibilityOff,
                         title = S.ITEM_COVER_BLOCK,
                         summary = S.ITEM_COVER_BLOCK_SUM,
@@ -187,6 +188,27 @@ internal fun HomeScreen(
                                 checked = vm.config.coverBlock,
                                 onCheckedChange = { vm.setCoverBlock(it) },
                             )
+                        },
+                    )
+                    // ★ v0.1.99：切歌/切轨卡顿优化（实验性）总开关。
+                    //   当前阶段（Step 0）它只让宿主侧装一个**只读探针**，
+                    //   不会改变任何绘制行为 —— 所以文案如实写「暂不改变宿主表现」，
+                    //   绝不能写成「打开就不卡了」，那是在骗人。
+                    else -> MoriListItem(
+                        icon = Icons.Rounded.Bolt,
+                        title = S.ITEM_PERF,
+                        summary = S.ITEM_PERF_SUM,
+                        shape = shape,
+                        onClick = { vm.setPerfSwitch(!vm.config.perfSwitch) },
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                PillTag(S.TAG_EXPERIMENTAL)
+                                Spacer(Modifier.width(8.dp))
+                                MoriSwitch(
+                                    checked = vm.config.perfSwitch,
+                                    onCheckedChange = { vm.setPerfSwitch(it) },
+                                )
+                            }
                         },
                     )
                 }
@@ -407,6 +429,12 @@ private val StatusGlyphSize = 28.dp
  */
 @Composable
 private fun WipTag() {
+    PillTag(S.TAG_WIP)
+}
+
+/** 行尾小胶囊标签（「待开发」/「实验性」共用一套样式）。 */
+@Composable
+private fun PillTag(text: String) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -414,7 +442,7 @@ private fun WipTag() {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
-            text = S.TAG_WIP,
+            text = text,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             maxLines = 1,
