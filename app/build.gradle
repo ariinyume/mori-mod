@@ -29,11 +29,11 @@ plugins {
 //    两层唯一的耦合点是 config/ 里的纯数据类（MoriConfig 等，纯 Java 无 Android 依赖）。
 // ============================================================================
 
-def appVersionTag = '0.1.99'
-def appVersionCode = 10100
-def appVersionName = '0.1.99'
+def appVersionTag = '0.1.110'
+def appVersionCode = 10111
+def appVersionName = '0.1.110'
 // 开始新的一天：加一位，方便一眼看出构建日期
-def appVersionCodeLabel = '1104.2'
+def appVersionCodeLabel = '1105.11'
 
 // ── 本机私密配置（口令 / 密钥库路径），**不进仓库** ────────────────────────
 //   读取顺序：Gradle 属性（-Pxxx= / ~/.gradle/gradle.properties）→ local.properties

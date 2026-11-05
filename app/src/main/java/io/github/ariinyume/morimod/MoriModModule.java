@@ -12,7 +12,7 @@ import io.github.ariinyume.morimod.hook.FeatureF1;
 import io.github.ariinyume.morimod.hook.Heartbeat;
 import io.github.ariinyume.morimod.hook.FeatureF2;
 import io.github.ariinyume.morimod.hook.FeatureF4;
-import io.github.ariinyume.morimod.hook.PerfProbe;
+import io.github.ariinyume.morimod.hook.TrackSwitchRelief;
 import io.github.ariinyume.morimod.util.AppEnv;
 import io.github.ariinyume.morimod.util.BuildInfo;
 import io.github.ariinyume.morimod.util.DiagLog;
@@ -183,10 +183,9 @@ public class MoriModModule extends XposedModule {
         installSafely("F2", () -> FeatureF2.install(cl));
         installSafely("F1", () -> FeatureF1.install(cl));
         // ★ v0.1.99：切歌卡顿优化（实验性）总开关的落点。
-        //   install() 本身只挂配置监听，**不注册任何热钩子**；是否真的开始采集
-        //   由 perfSwitch 决定（见 PerfProbe#apply 的注释）。开关关着时，
-        //   View#draw / View#invalidateInternal 上一个 hook 都不会存在。
-        installSafely("PERF", () -> PerfProbe.install(cl));
+        //   v0.1.105：开关打开后，播放页曲名和作品名两条跑马灯保持不动。
+        //   开关关着时 setTranslationX 上没有 hook。
+        installSafely("RELIEF", () -> TrackSwitchRelief.install(cl));
 
         RemoteConfig.addListener(() -> {
             MoriConfig c = RemoteConfig.get();

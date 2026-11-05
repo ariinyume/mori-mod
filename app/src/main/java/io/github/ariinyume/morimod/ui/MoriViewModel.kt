@@ -310,10 +310,9 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 切歌/切轨卡顿优化（实验性）**总开关**（v0.1.99）。
      *
-     * <p>一次落盘就够：宿主侧 {@code hook/PerfProbe} 常驻配置监听，
-     * 开关打开时才开始挂钩子并采样，关闭时立刻停手（见 {@code PerfProbe#apply}）。
-     * 这条线上的后续改动（动画层 RenderNode、duration 缓存……）一律只读这一个开关，
-     * 不再各自开新旋钮。
+     * 一次落盘就够：宿主侧 {@code hook/TrackSwitchRelief} 听这个开关，
+     * 打开后播放页曲名和作品名不再滚动，关掉时不注册 hook。
+     * 这条线上的改动一律只读这一个开关，不再各自开新旋钮。
      */
     fun setPerfSwitch(v: Boolean) {
         config.perfSwitch = v

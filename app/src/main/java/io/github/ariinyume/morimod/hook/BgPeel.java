@@ -1,20 +1,27 @@
 package io.github.ariinyume.morimod.hook;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.Window;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
@@ -1845,7 +1852,8 @@ public final class BgPeel {
                                 Object self = chain.getThisObject();
                                 Object arg = chain.getArg(0);
                                 String st = arg instanceof Enum ? ((Enum<?>) arg).name() : String.valueOf(arg);
-                                armPageRepaint(self instanceof View ? (View) self : null, st);
+                                View screen = self instanceof View ? (View) self : null;
+                                armPageRepaint(screen, st);
                                 if (sActLeft > 0) {
                                     sActLeft--;
                                     android.util.Log.i("MoriSnap", "activityState " + st
@@ -1923,12 +1931,6 @@ public final class BgPeel {
         } catch (Throwable ignored) {
         }
     }
-
-    // ══════════════════════════════════════════════════════════════════
-    // r106：缩略图盖空窗**整条回退**（用户判定「更差」：所有切换都多了一次右滑 + 卡顿）。
-    // 只保留抓拍函数给诊断用；遮罩、VeilView、两条触发点都已删除。
-    // ══════════════════════════════════════════════════════════════════
-
 
     private static String name0(Object o) {
         try {

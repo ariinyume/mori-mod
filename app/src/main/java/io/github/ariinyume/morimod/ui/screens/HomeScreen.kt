@@ -190,10 +190,7 @@ internal fun HomeScreen(
                             )
                         },
                     )
-                    // ★ v0.1.99：切歌/切轨卡顿优化（实验性）总开关。
-                    //   当前阶段（Step 0）它只让宿主侧装一个**只读探针**，
-                    //   不会改变任何绘制行为 —— 所以文案如实写「暂不改变宿主表现」，
-                    //   绝不能写成「打开就不卡了」，那是在骗人。
+                    // ★ v0.1.105：打开后播放页曲名和作品名不再滚动。
                     else -> MoriListItem(
                         icon = Icons.Rounded.Bolt,
                         title = S.ITEM_PERF,
