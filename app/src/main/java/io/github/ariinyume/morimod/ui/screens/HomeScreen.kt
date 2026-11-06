@@ -72,7 +72,7 @@ import io.github.ariinyume.morimod.util.BuildInfo
 /**
  * 主页。
  *
- * 结构：可滚动内容（标题行 + 副标题 → 状态卡 → 「功能设置」5 项 → 「模块管理」4 项）。
+ * 结构：可滚动内容（标题行 + 副标题 → 状态卡 → 美化功能 → 优化功能 → 「模块管理」）。
  * 标题行**不吸顶**：它是列表的第一项，跟着一起滚走。
  *
  * ⚠️ 每个 `item {}` 内部**各自读一次 `vm.config` / `vm.hostScopeAlive`**：
@@ -136,16 +136,16 @@ internal fun HomeScreen(
             )
         }
 
-        // ── 功能设置 ──
+        // ── 美化功能 / 优化功能 ──
         // ⚠️「系统播放控件自定义」入口已移除：宿主最新版自带该功能，本模块这一项**搁置**
         //    （设置页没有入口，clamp() 里也强制 f1Enabled=false，能力层不会去动宿主通知栏）。
-        item { SectionHeader(S.SEC_FEATURES) }
+        item { SectionHeader(S.SEC_BEAUTY) }
         item {
             ConnectedItems(
-                count = 6,
+                count = 4,
                 modifier = Modifier.padding(horizontal = Space.ScreenH),
             ) { i ->
-                val shape = connectedItemShape(i, 6)
+                val shape = connectedItemShape(i, 4)
                 when (i) {
                     0 -> MoriListItem(
                         icon = Icons.Rounded.Image,
@@ -165,22 +165,12 @@ internal fun HomeScreen(
                         icon = Icons.Rounded.Star,
                         title = S.ITEM_GLASS,
                         shape = shape,
-                        // 未开发：如实反馈，不静默什么都不做
-                        onClick = { vm.notify(S.TOAST_RESERVED) },
-                        trailing = { WipTag() },
+                        onClick = { onNavigate(Dest.GLASS) },
+                        showChevron = true,
                     )
-                    3 -> MoriListItem(
-                        icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                        title = S.ITEM_LAYOUT,
-                        shape = shape,
-                        onClick = { vm.notify(S.TOAST_RESERVED) },
-                        trailing = { WipTag() },
-                    )
-                    // ★ r112 用户第 2 条：作品封面屏蔽
-                    4 -> MoriListItem(
+                    else -> MoriListItem(
                         icon = Icons.Rounded.VisibilityOff,
                         title = S.ITEM_COVER_BLOCK,
-                        summary = S.ITEM_COVER_BLOCK_SUM,
                         shape = shape,
                         onClick = { vm.setCoverBlock(!vm.config.coverBlock) },
                         trailing = {
@@ -190,23 +180,36 @@ internal fun HomeScreen(
                             )
                         },
                     )
-                    // ★ v0.1.105：打开后播放页曲名和作品名不再滚动。
-                    else -> MoriListItem(
+                }
+            }
+        }
+        item { SectionHeader(S.SEC_OPTIMIZE) }
+        item {
+            ConnectedItems(
+                count = 2,
+                modifier = Modifier.padding(horizontal = Space.ScreenH),
+            ) { i ->
+                val shape = connectedItemShape(i, 2)
+                if (i == 0) {
+                    MoriListItem(
                         icon = Icons.Rounded.Bolt,
                         title = S.ITEM_PERF,
-                        summary = S.ITEM_PERF_SUM,
                         shape = shape,
                         onClick = { vm.setPerfSwitch(!vm.config.perfSwitch) },
                         trailing = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                PillTag(S.TAG_EXPERIMENTAL)
-                                Spacer(Modifier.width(8.dp))
-                                MoriSwitch(
-                                    checked = vm.config.perfSwitch,
-                                    onCheckedChange = { vm.setPerfSwitch(it) },
-                                )
-                            }
+                            MoriSwitch(
+                                checked = vm.config.perfSwitch,
+                                onCheckedChange = { vm.setPerfSwitch(it) },
+                            )
                         },
+                    )
+                } else {
+                    MoriListItem(
+                        icon = Icons.AutoMirrored.Rounded.ReceiptLong,
+                        title = S.ITEM_LAYOUT,
+                        shape = shape,
+                        onClick = { vm.notify(S.TOAST_RESERVED) },
+                        trailing = { WipTag() },
                     )
                 }
             }
@@ -343,7 +346,7 @@ private enum class HostState { CHECKING, ACTIVE, INACTIVE, MISSING }
  * 状态卡。
  *
  * 不出现「状态卡」三个字；左侧只放一颗**小图标**指示插件运行状态
- * （√ 已注入 / × 未运行、未安装 / ? 检测中）。应用 logo 不在这里 ——
+ * （√ 正常运行 / × 未运行、未安装 / ? 检测中）。应用 logo 不在这里 ——
  * 它在桌面图标、LSPosed 模块列表（自适应图标）与「关于」页。
  */
 @Composable
@@ -420,7 +423,8 @@ private val StatusGlyphSize = 28.dp
 /**
  * 「待开发」小标签。
  *
- * ⚠️ v0.0.7 加的：液态玻璃 / 主页布局这两项目前只有一条 Snackbar 反馈，
+ * ⚠️ 主页布局仍是待开发；液态玻璃（v0.1.111）已进独立设置页。
+ * 原注释：液态玻璃 / 主页布局这两项目前只有一条 Snackbar 反馈，
  *    用户点完看页面没跳转，很容易判断成「点了没反应 / 功能坏了」。
  *    把状态**常驻**在行尾，用户点之前就知道它是待开发，点击后仍给一条 toast 兜底。
  */

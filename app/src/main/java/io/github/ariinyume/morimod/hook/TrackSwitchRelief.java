@@ -9,7 +9,7 @@ import io.github.ariinyume.morimod.util.XposedCompat;
 import io.github.libxposed.api.XposedInterface;
 
 /**
- * 播放页曲名、作品名跑马灯保持不动（v0.1.105）。
+ * 播放页曲名、作品名跑马灯保持不动（v0.1.105 / v0.1.122 加固）。
  *
  * <p>2.23.0 真机层级（PLK110，1272×2772）上这两条是同一结构，只是高度和透明度不同：
  * <pre>
@@ -18,8 +18,8 @@ import io.github.libxposed.api.XposedInterface;
  * RNCMaskedView 1153×77
  *   ReactViewGroup 3832×77 α=0.7    ← setTranslationX，作品名
  * </pre>
- * 开关打开后，这两条的平移一律丢掉，并在第一次命中时把已有偏移拉回 0，
- * 避免停在滚到一半的位置。关掉开关后下一次 setTranslationX 照常放行。
+ * 开关打开后，平移 / setX / scrollX / offsetLeftAndRight 一律丢掉，并在每次绘制时再钉一次，
+ * 避免 native 动画漏网造成轻微抖动。关掉开关后下一次位移照常放行。
  */
 public final class TrackSwitchRelief {
 
@@ -33,7 +33,7 @@ public final class TrackSwitchRelief {
             ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     private static volatile int sScreenW = 0;
-    private static final int[] sSeenW = new int[4];
+    private static final int[] sSeenW = new int[6];
     private static int sNoted = 0;
 
     private TrackSwitchRelief() {
@@ -62,27 +62,55 @@ public final class TrackSwitchRelief {
             return;
         }
         if (sOn) return;
-        if (!sHooked && !hookTranslation()) return;
+        if (!sHooked && !hookAll()) return;
         sOn = true;
         sNoted = 0;
         for (int i = 0; i < sSeenW.length; i++) sSeenW[i] = 0;
         XposedCompat.log(TAG + "on：曲名和作品名跑马灯保持不动");
     }
 
-    private static synchronized boolean hookTranslation() {
+    private static synchronized boolean hookAll() {
         if (sHooked) return true;
-        boolean ok = XposedCompat.hookMethod(
+        boolean okTx = XposedCompat.hookMethod(
                 View.class, "setTranslationX",
                 new Class<?>[]{float.class},
                 TrackSwitchRelief::onTranslationX,
                 TAG);
-        if (!ok) {
+        boolean okX = XposedCompat.hookMethod(
+                View.class, "setX",
+                new Class<?>[]{float.class},
+                TrackSwitchRelief::onSetX,
+                TAG);
+        boolean okScroll = XposedCompat.hookMethod(
+                View.class, "setScrollX",
+                new Class<?>[]{int.class},
+                TrackSwitchRelief::onScrollX,
+                TAG);
+        boolean okOff = XposedCompat.hookMethod(
+                View.class, "offsetLeftAndRight",
+                new Class<?>[]{int.class},
+                TrackSwitchRelief::onOffsetLeftRight,
+                TAG);
+        if (!okTx) {
             XposedCompat.log(TAG + "setTranslationX 没挂上，本次不启用");
             return false;
         }
         sHooked = true;
-        XposedCompat.log(TAG + "hooked setTranslationX");
+        XposedCompat.log(TAG + "hooked setTranslationX"
+                + (okX ? "+setX" : "")
+                + (okScroll ? "+setScrollX" : "")
+                + (okOff ? "+offsetLR" : ""));
         return true;
+    }
+
+    /**
+     * 绘制热路径兜底：漏网的 native 位移在下一帧画之前钉回 0。
+     */
+    public static void pinFromDraw(View v) {
+        if (!sOn || v == null) return;
+        if (Boolean.TRUE.equals(SKIP.get())) return;
+        if (!isMarquee(v)) return;
+        freezeHard(v);
     }
 
     private static Object onTranslationX(XposedInterface.Chain chain) throws Throwable {
@@ -91,35 +119,87 @@ public final class TrackSwitchRelief {
         Object self = chain.getThisObject();
         if (!(self instanceof View) || !isMarquee((View) self)) return chain.proceed();
         View v = (View) self;
-        note(v);
-        if (v.getTranslationX() != 0f) {
-            SKIP.set(Boolean.TRUE);
-            try {
-                v.setTranslationX(0f);
-            } finally {
-                SKIP.set(Boolean.FALSE);
-            }
-        }
+        note(v, "tx");
+        freezeHard(v);
         return null;
     }
 
+    private static Object onSetX(XposedInterface.Chain chain) throws Throwable {
+        if (Boolean.TRUE.equals(SKIP.get())) return chain.proceed();
+        if (!sOn) return chain.proceed();
+        Object self = chain.getThisObject();
+        if (!(self instanceof View) || !isMarquee((View) self)) return chain.proceed();
+        View v = (View) self;
+        note(v, "x");
+        freezeHard(v);
+        return null;
+    }
+
+    private static Object onScrollX(XposedInterface.Chain chain) throws Throwable {
+        if (Boolean.TRUE.equals(SKIP.get())) return chain.proceed();
+        if (!sOn) return chain.proceed();
+        Object self = chain.getThisObject();
+        if (!(self instanceof View) || !isMarquee((View) self)) return chain.proceed();
+        View v = (View) self;
+        note(v, "sx");
+        freezeHard(v);
+        return null;
+    }
+
+    private static Object onOffsetLeftRight(XposedInterface.Chain chain) throws Throwable {
+        if (Boolean.TRUE.equals(SKIP.get())) return chain.proceed();
+        if (!sOn) return chain.proceed();
+        Object self = chain.getThisObject();
+        if (!(self instanceof View) || !isMarquee((View) self)) return chain.proceed();
+        Object arg = chain.getArg(0);
+        if (arg instanceof Integer && ((Integer) arg) == 0) return chain.proceed();
+        note((View) self, "olr");
+        freezeHard((View) self);
+        return null;
+    }
+
+    private static void freezeHard(View v) {
+        SKIP.set(Boolean.TRUE);
+        try {
+            if (v.getTranslationX() != 0f) v.setTranslationX(0f);
+            if (v.getScrollX() != 0) v.setScrollX(0);
+            try {
+                // 清掉可能还在跑的属性动画，避免下一帧又推一把。
+                v.animate().cancel();
+            } catch (Throwable ignored) {
+            }
+        } finally {
+            SKIP.set(Boolean.FALSE);
+        }
+    }
+
     /**
-     * 遮罩的直接子 View，又宽又扁，宽过屏宽。
-     * 曲名（约 81px）和作品名（约 77px、α=0.7）都是这一形态。
+     * 遮罩的直接子 View，又宽又扁。
+     * 优先认 RNCMaskedView 父节点（不必等布局到两倍屏宽），减少开滚那几帧漏网。
      */
     private static boolean isMarquee(View v) {
         int h = v.getHeight();
         int w = v.getWidth();
-        if (h < 36 || h > 200) return false;
-        if (w < h * 8) return false;
-        int screen = screenWidth(v);
-        if (screen > 0 && w < screen + screen / 5) return false;
+        if (h < 36 || h > 220) return false;
+        if (w < h * 4) return false;
         String cn = v.getClass().getName();
-        if (cn == null || !cn.endsWith("ReactViewGroup")) return false;
+        if (cn == null) return false;
+        // 只认 RN 文本行，别误伤首页横向滚动的 ReactViewGroup 长条。
+        boolean reactRow = cn.endsWith("ReactViewGroup") || cn.contains("ReactText");
+        if (!reactRow) return false;
         ViewParent parent = v.getParent();
-        if (!(parent instanceof View)) return false;
-        String pn = ((View) parent).getClass().getName();
-        return pn != null && pn.endsWith("RNCMaskedView");
+        if (parent instanceof View) {
+            View p = (View) parent;
+            String pn = p.getClass().getName();
+            if (pn != null && pn.endsWith("RNCMaskedView")) {
+                int pw = p.getWidth();
+                // 比遮罩更宽 = 跑马灯内容条；遮罩未量完时也先按扁条钉住。
+                if (pw <= 0 || w > pw + 8) return true;
+            }
+        }
+        // 无 MaskedView 时仍要求明显长于两屏，避免钉死普通横向列表内容行。
+        int screen = screenWidth(v);
+        return screen > 0 && w >= screen * 2 && w >= h * 8;
     }
 
     private static int screenWidth(View v) {
@@ -134,7 +214,7 @@ public final class TrackSwitchRelief {
         return w;
     }
 
-    private static void note(View v) {
+    private static void note(View v, String via) {
         int w = v.getWidth();
         int n = sNoted;
         for (int i = 0; i < n && i < sSeenW.length; i++) {
@@ -143,7 +223,7 @@ public final class TrackSwitchRelief {
         if (n >= sSeenW.length) return;
         sSeenW[n] = w;
         sNoted = n + 1;
-        XposedCompat.log(TAG + "hold " + w + "x" + v.getHeight()
+        XposedCompat.log(TAG + "hold " + via + " " + w + "x" + v.getHeight()
                 + " tx=" + v.getTranslationX());
     }
 }

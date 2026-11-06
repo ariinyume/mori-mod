@@ -29,11 +29,11 @@ plugins {
 //    两层唯一的耦合点是 config/ 里的纯数据类（MoriConfig 等，纯 Java 无 Android 依赖）。
 // ============================================================================
 
-def appVersionTag = '0.1.110'
-def appVersionCode = 10111
-def appVersionName = '0.1.110'
+def appVersionTag = '0.1.122'
+def appVersionCode = 10123
+def appVersionName = '0.1.122'
 // 开始新的一天：加一位，方便一眼看出构建日期
-def appVersionCodeLabel = '1105.11'
+def appVersionCodeLabel = '1106.12'
 
 // ── 本机私密配置（口令 / 密钥库路径），**不进仓库** ────────────────────────
 //   读取顺序：Gradle 属性（-Pxxx= / ~/.gradle/gradle.properties）→ local.properties
@@ -126,6 +126,10 @@ androidComponents {
 dependencies {
     // libxposed 现代 API（API 102）。compileOnly —— API 由框架运行时提供，不打进 APK。
     compileOnly 'io.github.libxposed:api:102.0.0'
+    // 模块自己的进程里向框架查作用域（状态卡「已授权」）。类要打进 APK，框架才会把 binder 送进来。
+    // 上游 AAR 元数据写了 minCompileSdk=37，AGP 8.12 配 compileSdk 36 会直接拒绝。
+    // 本机 maven-local 里是同一份包，只把 minCompileSdk 改成 36，字节码没动。
+    implementation 'io.github.libxposed:service:102.0.0'
 
     // ── 设置页：Jetpack Compose + Material 3 Expressive ──────────────
     // ⚠️ 版本选型是**实测 javap 出来的**，不是照文档猜的：

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- libxposed service 库清单 minSdk 是 26，模块本身仍是 24。 -->
+    <uses-sdk tools:overrideLibrary="io.github.libxposed.service,io.github.libxposed.service.interfaces" />
 
     <!--
       libxposed 现代 API（102）：不再需要 xposedmodule / xposeddescription /

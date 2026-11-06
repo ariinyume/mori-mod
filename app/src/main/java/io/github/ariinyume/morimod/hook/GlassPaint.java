@@ -5,6 +5,7 @@ import android.graphics.BitmapShader;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.view.View;
@@ -17,29 +18,12 @@ import android.view.View;
  * {@code Drawable#draw}，自己 {@code drawBitmap} 一张<b>整屏</b>壁纸，然后
  * {@code return true} 跳过宿主原来的绘制。
  *
- * <p>这条路在「面板跑在独立 Dialog 窗口」时有三处不可控：
- * <ol>
- *   <li><b>坐标</b>：位置只由 {@code coverRect(bmp, -loc[0], -loc[1])} 决定，而 {@code loc}
- *       取自 {@code getLocationInWindow()} —— Dialog 窗口原点 ≠ 屏幕原点
- *       （r12 日志：面板 {@code top=280}）⇒ 整块位图被推离面板；</li>
- *   <li><b>裁剪</b>：{@code clipRect(bounds)} 一裁，偏移后的位图<b>一个像素都不剩</b>；</li>
- *   <li><b>静默</b>：{@code Canvas#drawBitmap} 画在裁剪区外<b>不抛异常</b> ⇒
- *       {@code drew = true} ⇒ 上层认为成功 ⇒ <b>面板整块消失</b>
- *       （用户第 4 / 9 条的真相：消失的不是宿主界面，是面板自己不透明的底）。</li>
- * </ol>
- *
  * <p>现在改成：反射取宿主 {@code BackgroundDrawable} 里那支 {@code Paint}
  * （dex 实证：2.22.0 上是 {@code k:Paint}，整个类只有这一个 Paint 字段），
  * 给它 {@code setShader(BitmapShader)}，然后 <b>{@code chain.proceed()} 让宿主自己画</b>。
  *
- * <p>好处是结构性的，不是调参调出来的：
- * <ul>
- *   <li>不跳过宿主绘制 ⇒ <b>不可能</b>再出现「面板消失」，最差也只是模糊图错位；</li>
- *   <li>圆角由宿主自己的 {@code j:Path} 完成（dex 证明 {@code BackgroundDrawable}
- *       <b>没有</b> {@code float[]}，圆角在 Path 里）⇒ 第 5 条后半自动解决；</li>
- *   <li>子内容与滚动完全交给 RN ⇒ 第 3 条「卡住一块壁纸」不再可能；</li>
- *   <li>每块面板只有一处颜料 ⇒ 天然统一（第 6 条），也不会「分层出现」。</li>
- * </ul>
+ * <p>★★★ v0.1.111：液态玻璃升级 —— 可选 {@link LiquidGlass#compose} 叠高光 +
+ * {@link LiquidGlass#refraction} 边缘微放大。失败一律退回纯 BitmapShader。
  */
 final class GlassPaint {
 
@@ -70,6 +54,7 @@ final class GlassPaint {
     /** 复用的 Matrix（draw 都在 UI 线程）。 */
     private static final ThreadLocal<Matrix> MAT = ThreadLocal.withInitial(Matrix::new);
     private static final ThreadLocal<int[]> LOC = ThreadLocal.withInitial(() -> new int[2]);
+    private static final ThreadLocal<RectF> PANEL = ThreadLocal.withInitial(RectF::new);
 
     /**
      * 找「这个背景 drawable 用哪支 Paint 落笔」。
@@ -104,6 +89,20 @@ final class GlassPaint {
      * @return null = 这条路用不上（找不到 Paint / 位图不可用），调用方照旧
      */
     static Token begin(Drawable d, View v, Rect b, Bitmap blur, int screenW, int screenH) {
+        return begin(d, v, b, blur, screenW, screenH, false, false, 1f, LiquidGlass.Mode.REGULAR);
+    }
+
+    /**
+     * 液态玻璃入口（v0.1.111）。
+     *
+     * @param liquid     是否启用折射 + 可选高光
+     * @param specular   是否叠镜面高光（低端机可关）
+     * @param refraction 折射系数；≤1.001 跳过
+     * @param mode       REGULAR / CLEAR（影响高光强度）
+     */
+    static Token begin(Drawable d, View v, Rect b, Bitmap blur, int screenW, int screenH,
+                       boolean liquid, boolean specular, float refraction,
+                       LiquidGlass.Mode mode) {
         if (d == null || b == null || b.isEmpty()) return null;
         if (blur == null || blur.isRecycled() || blur.getWidth() <= 0 || blur.getHeight() <= 0) {
             return null;
@@ -119,18 +118,22 @@ final class GlassPaint {
         } catch (Throwable t) {
             return null;
         }
-        BitmapShader sh = shader(blur, v, b, screenW, screenH);
+        BitmapShader sh = shader(blur, v, b, screenW, screenH,
+                liquid ? refraction : 1f);
         if (sh == null) return null;
+        Shader finalShader = sh;
+        if (liquid && specular) {
+            RectF panel = PANEL.get();
+            panel.set(b);
+            Shader composed = LiquidGlass.compose(sh, panel, mode);
+            if (composed != null) finalShader = composed;
+        }
         Token tk = new Token(p);
         try {
-            p.setShader(sh);
+            p.setShader(finalShader);
             // BitmapShader 的插值由 Paint 的 filter 决定：不打开会有明显的马赛克方块。
             p.setFilterBitmap(true);
             // ★★★ v0.1.42（r13）：**别让 alpha 把玻璃吃掉**。
-            //   RN 的 BackgroundDrawable 是拿同一支 Paint 反复用的，某些帧它的
-            //   alpha 会被压到很低（压暗/淡入过渡）。shader 一样受 alpha 调制 ⇒
-            //   玻璃被画成近乎透明 ⇒ 面板看起来「和背景融为一体 / 还是深色」。
-            //   只在 alpha 明显偏低时抬到不透明；本来半透明的面板保持原样。
             if (tk.prevAlpha < 200) p.setAlpha(255);
         } catch (Throwable t) {
             end(tk);
@@ -154,16 +157,10 @@ final class GlassPaint {
      * 建 shader，并把它的坐标系对齐到「这块 drawable 在<b>窗口</b>里占的那一格」。
      *
      * <p>★★★ v0.1.98（浮窗割裂 / 移位）：对齐基准从「屏幕」改成「窗口」。
-     * 页面壁纸（{@link BgPeel#paintAligned}）与窗口背景（{@code CoverDrawable}）
-     * 都按<b>本窗口</b>铺图，玻璃必须用同一套基准，否则浮窗下面板里那一块壁纸
-     * 会和背后的壁纸错开（看起来像「玻璃里贴了另一张图」）。
-     * 全屏时窗口原点 ≡ 屏幕原点 ⇒ 这一改动对全屏画面零影响。
-     *
-     * <p>Matrix 是「先 cover 缩放，再平移到 (窗口坐标 − 本块位置)」：
-     * 本地点 {@code (b.left, b.top)} 恰好落在壁纸的 {@code (offX, offY)} 上 ⇒
-     * 透过玻璃看到的就是<b>这块面板背后那一片</b>壁纸，与页面背景严丝合缝。
+     * <p>★★★ v0.1.111：可选折射（面板中心微放大）。
      */
-    private static BitmapShader shader(Bitmap bmp, View v, Rect b, int sw, int sh) {
+    private static BitmapShader shader(Bitmap bmp, View v, Rect b, int sw, int sh,
+                                       float refractionK) {
         int bw = bmp.getWidth();
         int bh = bmp.getHeight();
         // 与 coverRect 同一套算法：等比放大到刚好盖住整屏，再居中。
@@ -185,6 +182,11 @@ final class GlassPaint {
             m.reset();
             m.setScale(scale, scale);
             m.postTranslate(offX - vx - b.left, offY - vy - b.top);
+            if (refractionK > 1.001f) {
+                RectF panel = PANEL.get();
+                panel.set(b);
+                LiquidGlass.refraction(m, panel, refractionK);
+            }
             BitmapShader s = new BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
             s.setLocalMatrix(m);
             return s;
@@ -197,12 +199,6 @@ final class GlassPaint {
      * 面板在<b>本窗口内</b>的「布局终态」位置（去掉 translation / 滑入动画）。
      *
      * <p>★★★ v0.1.98：从 {@code getLocationOnScreen} 换成 {@code getLocationInWindow}。
-     * 老版之所以用屏幕坐标，是因为要「把窗口偏移算进去」；现在壁纸本来就按窗口铺
-     * （见 {@link BgPeel#rootGeometry}），窗口偏移必须<b>排除</b>，否则浮窗下玻璃
-     * 会整体被窗口位置推走一格 —— 正是用户报的「背景割裂 + 移位」。
-     *
-     * <p>仍然要减去自身到根的 translationX/Y 累计：RN Modal / BottomSheet 的滑入
-     * 几乎都走 translationY，不去掉的话第一帧玻璃会跟着动画跑、闪一块深色。
      */
     static void stableWindowLoc(View v, int[] out) {
         v.getLocationInWindow(out);

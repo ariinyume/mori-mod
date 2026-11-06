@@ -95,6 +95,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         repairFontFileNames()
         // 桌面图标状态与配置对齐（配置可能来自导入的备份 / 另一台设备的配置）。
         syncLauncherIcon(persist = false)
+        LspScope.start { granted -> hostScopeAlive = granted }
     }
 
     /**
@@ -282,11 +283,48 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
-    /** 液态玻璃（第二批功能，仅记录偏好）。 */
+    /** 液态玻璃主题总开关（v0.1.111 起宿主侧真正消费）。 */
     fun setF3Enabled(v: Boolean) {
         config.f3Enabled = v
-        persist()
-        toast = S.TOAST_GLASS_SAVED
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    fun setF3Mode(mode: String) {
+        config.f3Mode = mode
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    fun setF3Blur(v: Int) {
+        config.f3Blur = v.coerceIn(0, 100)
+        touch()
+    }
+
+    fun commitF3Blur() {
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    fun setF3Tint(v: Int) {
+        config.f3Tint = v.coerceIn(0, 100)
+        touch()
+    }
+
+    fun commitF3Tint() {
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    fun setF3Specular(v: Boolean) {
+        config.f3Specular = v
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    fun setF3Coverage(v: String) {
+        config.f3Coverage = v
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
     }
 
     /**
@@ -786,19 +824,21 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 就直接落「未运行」，不会永远停在「检测中」。
      */
     fun tickHostStatus() {
+        // LSPosed 作用域里有宿主 ⇒ 正常运行。不再因为心跳过期写成未运行。
+        val scoped = LspScope.granted
+        if (scoped != null) {
+            hostScopeAlive = scoped
+            return
+        }
         val app = getApplication<Application>()
         val beat = XPrefs.getLong(app, HostStatusReceiver.PREFS,
             HostStatusReceiver.K_LAST_ALIVE, 0L)
         if (beat > hostLastSeenWall) hostLastSeenWall = beat
-
-        val now = System.currentTimeMillis()
+        // 服务还没回来时，曾经注入成功也先显示正常运行（授权过才会有心跳）。
         if (hostLastSeenWall > 0L) {
-            val age = now - hostLastSeenWall
-            // 时钟回拨 / 未来时间戳：当成「刚刚见过」，别因为差值为负就判死
-            hostScopeAlive = age < HOST_ALIVE_WINDOW_MS || age < 0L
+            hostScopeAlive = true
             return
         }
-        // 一次都没见过：给宿主一个足够的宽限窗口，然后落终态
         if (SystemClock.elapsedRealtime() - probeStartElapsed > HOST_ALIVE_GRACE_MS) {
             hostScopeAlive = false
         }

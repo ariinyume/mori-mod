@@ -48,6 +48,8 @@ internal abstract class MoriStrings {
 
     // ── 主页：分区与列表项 ─────────────────────────────────────────
     abstract val SEC_FEATURES: String
+    abstract val SEC_BEAUTY: String
+    abstract val SEC_OPTIMIZE: String
     abstract val SEC_MANAGE: String
 
     abstract val ITEM_MEDIA: String
@@ -110,6 +112,27 @@ internal abstract class MoriStrings {
 
     /** 长按删除背景图的确认文案。 */
     abstract val F2_DELETE_BODY: String
+
+
+    // ── F3 液态玻璃 ────────────────────────────────────────────────
+    abstract val F3_TITLE: String
+    abstract val F3_ENABLE: String
+    abstract val F3_ENABLE_NOTE: String
+    abstract val F3_MODE: String
+    abstract val F3_MODE_REGULAR: String
+    abstract val F3_MODE_CLEAR: String
+    abstract val F3_MODE_REGULAR_SUM: String
+    abstract val F3_MODE_CLEAR_SUM: String
+    abstract val F3_BLUR: String
+    abstract val F3_TINT: String
+    abstract val F3_TINT_NOTE: String
+    abstract val F3_SPECULAR: String
+    abstract val F3_COVERAGE: String
+    abstract val F3_COV_PANELS: String
+    abstract val F3_COV_FULL: String
+    abstract val F3_COV_PANELS_SUM: String
+    abstract val F3_COV_FULL_SUM: String
+    abstract val F3_FOOTNOTE: String
 
     // ── F4 字体 ────────────────────────────────────────────────────
     abstract val F4_TITLE: String
@@ -250,22 +273,24 @@ internal object ZhCn : MoriStrings() {
     override val STATUS_HOST = "DLsiteSound 版本"
     override val STATUS_RUNTIME = "运行状况"
     override val STATUS_CHECKING = "检测中…"
-    override val STATUS_ACTIVE = "已注入宿主"
+    override val STATUS_ACTIVE = "正常运行"
     override val STATUS_INACTIVE = "未运行"
     override val STATUS_HOST_MISSING = "未安装"
 
     override val SEC_FEATURES = "功能设置"
+    override val SEC_BEAUTY = "美化功能"
+    override val SEC_OPTIMIZE = "优化功能"
     override val SEC_MANAGE = "模块管理"
 
     override val ITEM_MEDIA = "系统播放控件自定义"
     override val ITEM_MEDIA_SUM = "仅针对通知栏 / 锁屏进行替换"
-    override val ITEM_BACKGROUND = "主程序背景自定义"
-    override val ITEM_GLASS = "主程序液态玻璃主题"
-    override val ITEM_FONT = "主程序字体替换"
+    override val ITEM_BACKGROUND = "背景自定义"
+    override val ITEM_GLASS = "液态玻璃主题"
+    override val ITEM_FONT = "字体替换"
     override val ITEM_LAYOUT = "主页模块布局调整"
     override val ITEM_COVER_BLOCK = "作品封面屏蔽"
     override val ITEM_COVER_BLOCK_SUM = "全页面不显示作品封面，位置仍可点击"
-    override val ITEM_PERF = "切换音轨卡顿优化"
+    override val ITEM_PERF = "播放页曲名 / 作品名停止滚动"
     override val ITEM_PERF_SUM = "实验性。播放页曲名和作品名不再滚动"
     override val ITEM_HIDE_ICON = "隐藏模块桌面图标"
     override val ITEM_DEBUG_LOG = "调试日志"
@@ -304,6 +329,26 @@ internal object ZhCn : MoriStrings() {
     override val BTN_CROP_USE = "使用这块"
     override val TOAST_CROP_FAILED = "裁剪失败，已保留原图"
     override val F2_DELETE_BODY = "会从图库里删掉这张图。如果它正被用作宿主背景，背景会一并恢复成宿主默认。"
+
+
+    override val F3_TITLE = "主程序液态玻璃主题"
+    override val F3_ENABLE = "启用液态玻璃"
+    override val F3_ENABLE_NOTE = "需要先启用「主程序背景自定义」并选择壁纸。关掉后恢复原来的磨砂面板效果。"
+    override val F3_MODE = "材质"
+    override val F3_MODE_REGULAR = "常规"
+    override val F3_MODE_CLEAR = "通透"
+    override val F3_MODE_REGULAR_SUM = "常规：更明显的压暗与模糊（对齐 iOS regular）"
+    override val F3_MODE_CLEAR_SUM = "通透：更轻的模糊、更少压暗（对齐 iOS clear）"
+    override val F3_BLUR = "模糊强度"
+    override val F3_TINT = "压暗强度"
+    override val F3_TINT_NOTE = "66 对齐 iOS 实测；壁纸是照片时可调到 80~100 更透。"
+    override val F3_SPECULAR = "镜面高光"
+    override val F3_COVERAGE = "覆盖范围"
+    override val F3_COV_PANELS = "仅弹层"
+    override val F3_COV_FULL = "含工具栏"
+    override val F3_COV_PANELS_SUM = "只处理底部弹层 / 信息面板（推荐）"
+    override val F3_COV_FULL_SUM = "含 chrome 的面清单仍在取证；本版仅记录偏好，绘制仍只覆盖弹层。"
+    override val F3_FOOTNOTE = "液态玻璃在 Android 上由模块自行渲染（宿主无原生实现）。导航栏与设置卡片不会被玻璃化。"
 
     override val F4_TITLE = "主程序字体替换"
     override val F4_CARD = "启用字体替换"
@@ -404,7 +449,7 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_RESERVED = "待开发功能，请等待更新"
     override val TAG_WIP = "待开发"
     override val TAG_EXPERIMENTAL = "实验性"
-    override val TOAST_GLASS_SAVED = "液态玻璃为第二批功能，偏好已记录"
+    override val TOAST_GLASS_SAVED = "液态玻璃设置已保存"
     override val TOAST_DEFAULT_RESTORED = "已恢复宿主默认"
     override val TOAST_BG_RESTORED = "已恢复为宿主默认背景"
     override val TOAST_NO_SELECTION = "请先选择一个文件"
@@ -429,22 +474,24 @@ internal object ZhTw : MoriStrings() {
     override val STATUS_HOST = "DLsiteSound 版本"
     override val STATUS_RUNTIME = "執行狀況"
     override val STATUS_CHECKING = "偵測中…"
-    override val STATUS_ACTIVE = "已注入宿主"
+    override val STATUS_ACTIVE = "正常執行"
     override val STATUS_INACTIVE = "未執行"
     override val STATUS_HOST_MISSING = "未安裝"
 
     override val SEC_FEATURES = "功能設定"
+    override val SEC_BEAUTY = "美化功能"
+    override val SEC_OPTIMIZE = "最佳化功能"
     override val SEC_MANAGE = "模組管理"
 
     override val ITEM_MEDIA = "系統播放控制項自訂"
     override val ITEM_MEDIA_SUM = "僅針對通知列 / 鎖定畫面進行替換"
-    override val ITEM_BACKGROUND = "主程式背景自訂"
-    override val ITEM_GLASS = "主程式液態玻璃主題"
-    override val ITEM_FONT = "主程式字型替換"
+    override val ITEM_BACKGROUND = "背景自訂"
+    override val ITEM_GLASS = "液態玻璃主題"
+    override val ITEM_FONT = "字型替換"
     override val ITEM_LAYOUT = "首頁模組版面調整"
     override val ITEM_COVER_BLOCK = "作品封面屏蔽"
     override val ITEM_COVER_BLOCK_SUM = "全頁面不顯示作品封面，位置仍可點擊"
-    override val ITEM_PERF = "切換音軌卡頓最佳化"
+    override val ITEM_PERF = "播放頁曲名 / 作品名停止滾動"
     override val ITEM_PERF_SUM = "實驗性。播放頁曲名和作品名不再滾動"
     override val ITEM_HIDE_ICON = "隱藏模組桌面圖示"
     override val ITEM_DEBUG_LOG = "除錯日誌"
@@ -483,6 +530,26 @@ internal object ZhTw : MoriStrings() {
     override val BTN_CROP_USE = "使用這塊"
     override val TOAST_CROP_FAILED = "裁剪失敗，已保留原圖"
     override val F2_DELETE_BODY = "會從圖庫裡刪掉這張圖。如果它正被用作宿主背景，背景會一併還原成宿主預設。"
+
+
+    override val F3_TITLE = "主程式液態玻璃主題"
+    override val F3_ENABLE = "啟用液態玻璃"
+    override val F3_ENABLE_NOTE = "需要先啟用「主程式背景自訂」並選擇壁紙。關掉後恢復原來的磨砂面板效果。"
+    override val F3_MODE = "材質"
+    override val F3_MODE_REGULAR = "常規"
+    override val F3_MODE_CLEAR = "通透"
+    override val F3_MODE_REGULAR_SUM = "常規：更明顯的壓暗與模糊（對齊 iOS regular）"
+    override val F3_MODE_CLEAR_SUM = "通透：更輕的模糊、更少壓暗（對齊 iOS clear）"
+    override val F3_BLUR = "模糊強度"
+    override val F3_TINT = "壓暗強度"
+    override val F3_TINT_NOTE = "66 對齊 iOS 實測；壁紙是照片時可調到 80~100 更透。"
+    override val F3_SPECULAR = "鏡面高光"
+    override val F3_COVERAGE = "覆蓋範圍"
+    override val F3_COV_PANELS = "僅彈層"
+    override val F3_COV_FULL = "含工具列"
+    override val F3_COV_PANELS_SUM = "只處理底部彈層 / 資訊面板（推薦）"
+    override val F3_COV_FULL_SUM = "含 chrome 的面清單仍在取證；本版僅記錄偏好，繪製仍只覆蓋彈層。"
+    override val F3_FOOTNOTE = "液態玻璃在 Android 上由模組自行渲染（宿主無原生實作）。導覽列與設定卡片不會被玻璃化。"
 
     override val F4_TITLE = "主程式字型替換"
     override val F4_CARD = "啟用字型替換"
@@ -583,7 +650,7 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_RESERVED = "待開發功能，請等待更新"
     override val TAG_WIP = "待開發"
     override val TAG_EXPERIMENTAL = "實驗性"
-    override val TOAST_GLASS_SAVED = "液態玻璃為第二批功能，偏好已記錄"
+    override val TOAST_GLASS_SAVED = "液態玻璃設定已儲存"
     override val TOAST_DEFAULT_RESTORED = "已還原宿主預設"
     override val TOAST_BG_RESTORED = "已還原為宿主預設背景"
     override val TOAST_NO_SELECTION = "請先選擇一個檔案"
@@ -608,22 +675,24 @@ internal object En : MoriStrings() {
     override val STATUS_HOST = "DLsiteSound version"
     override val STATUS_RUNTIME = "Runtime"
     override val STATUS_CHECKING = "Checking…"
-    override val STATUS_ACTIVE = "Injected"
+    override val STATUS_ACTIVE = "Running"
     override val STATUS_INACTIVE = "Not running"
     override val STATUS_HOST_MISSING = "Not installed"
 
     override val SEC_FEATURES = "Features"
+    override val SEC_BEAUTY = "Appearance"
+    override val SEC_OPTIMIZE = "Tweaks"
     override val SEC_MANAGE = "Module"
 
     override val ITEM_MEDIA = "Playback controls"
     override val ITEM_MEDIA_SUM = "Replaces notification & lock screen only"
-    override val ITEM_BACKGROUND = "App background"
-    override val ITEM_GLASS = "Liquid glass theme"
-    override val ITEM_FONT = "App font"
+    override val ITEM_BACKGROUND = "Background"
+    override val ITEM_GLASS = "Liquid glass"
+    override val ITEM_FONT = "Font"
     override val ITEM_LAYOUT = "Home layout"
-    override val ITEM_COVER_BLOCK = "Blur work covers"
+    override val ITEM_COVER_BLOCK = "Hide work covers"
     override val ITEM_COVER_BLOCK_SUM = "Hide cover art everywhere; the area stays tappable"
-    override val ITEM_PERF = "Track-switch stutter"
+    override val ITEM_PERF = "Stop title scrolling"
     override val ITEM_PERF_SUM = "Experimental. Track and work titles stay still on the player"
     override val ITEM_HIDE_ICON = "Hide launcher icon"
     override val ITEM_DEBUG_LOG = "Debug log"
@@ -662,6 +731,26 @@ internal object En : MoriStrings() {
     override val BTN_CROP_USE = "Use this area"
     override val TOAST_CROP_FAILED = "Crop failed — original image kept"
     override val F2_DELETE_BODY = "This removes the image from your library. If it is the current app background, the background is restored to the host default as well."
+
+
+    override val F3_TITLE = "Liquid glass theme"
+    override val F3_ENABLE = "Enable liquid glass"
+    override val F3_ENABLE_NOTE = "Requires a custom wallpaper. Turning off restores the previous frosted panels."
+    override val F3_MODE = "Material"
+    override val F3_MODE_REGULAR = "Regular"
+    override val F3_MODE_CLEAR = "Clear"
+    override val F3_MODE_REGULAR_SUM = "Regular: stronger tint and blur (matches iOS regular)"
+    override val F3_MODE_CLEAR_SUM = "Clear: lighter blur, less tint (matches iOS clear)"
+    override val F3_BLUR = "Blur strength"
+    override val F3_TINT = "Tint strength"
+    override val F3_TINT_NOTE = "66 matches iOS measurements; raise to 80–100 for photo wallpapers."
+    override val F3_SPECULAR = "Specular highlight"
+    override val F3_COVERAGE = "Coverage"
+    override val F3_COV_PANELS = "Panels only"
+    override val F3_COV_FULL = "Include chrome"
+    override val F3_COV_PANELS_SUM = "Only bottom sheets / info panels (recommended)"
+    override val F3_COV_FULL_SUM = "Chrome surfaces are still being surveyed; this build only stores the preference."
+    override val F3_FOOTNOTE = "On Android the module renders glass itself (host has no native path). Nav chrome and settings cards stay unglassed."
 
     override val F4_TITLE = "App font"
     override val F4_CARD = "Enable font replacement"
@@ -762,7 +851,7 @@ internal object En : MoriStrings() {
     override val TOAST_RESERVED = "Not available yet — please wait for an update"
     override val TAG_WIP = "Coming soon"
     override val TAG_EXPERIMENTAL = "BETA"
-    override val TOAST_GLASS_SAVED = "Liquid glass arrives in the second batch; preference saved"
+    override val TOAST_GLASS_SAVED = "Liquid glass settings saved"
     override val TOAST_DEFAULT_RESTORED = "Restored host default"
     override val TOAST_BG_RESTORED = "Restored host default background"
     override val TOAST_NO_SELECTION = "Pick a file first"

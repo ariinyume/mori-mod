@@ -165,8 +165,29 @@ public final class MoriConfig {
      */
     public int f2PageAlpha = 55;
 
-    // ── F3 液态玻璃（第二批 v1.1，仅记录偏好，宿主侧尚未消费）──────────
+    // ── F3 液态玻璃主题（v0.1.111 起宿主侧真正消费）──────────────────
     public boolean f3Enabled = false;
+    /**
+     * 材质档：{@code regular}（默认，对齐 iOS GlassView regular）/
+     * {@code clear}（更透、模糊更轻）。
+     */
+    public String f3Mode = "regular";
+    /** 模糊强度 0–100；默认 38（对齐既有磨砂）。 */
+    public int f3Blur = 38;
+    /**
+     * 压暗强度 0–100：100 = 完全不压暗（最透），
+     * <b>默认 66</b>（对齐 §2.6.2 实测 0.66）。壁纸是照片时允许调到 80~100。
+     */
+    public int f3Tint = 66;
+    /** 镜面高光开关（低端机可关）。 */
+    public boolean f3Specular = true;
+    /**
+     * 覆盖面：{@code panels}（仅弹层，默认）/ {@code full}（含 chrome；
+     * chrome 绘制要等 S0 面清单实证后再开，当前 full 只影响日志分类）。
+     */
+    public String f3Coverage = "panels";
+    /** 边缘 rim（方案 S3，默认关）。 */
+    public boolean f3Rim = false;
 
     // ── F4 自定义字体（全局强制替换）─────────────────────────────────
     public boolean f4Enabled = false;
@@ -271,6 +292,12 @@ public final class MoriConfig {
         c.f2AccentStyle = f2AccentStyle;
         c.f2PageAlpha = f2PageAlpha;
         c.f3Enabled = f3Enabled;
+        c.f3Mode = f3Mode;
+        c.f3Blur = f3Blur;
+        c.f3Tint = f3Tint;
+        c.f3Specular = f3Specular;
+        c.f3Coverage = f3Coverage;
+        c.f3Rim = f3Rim;
         c.f4Enabled = f4Enabled; c.f4FontFamily = f4FontFamily; c.f4FontFile = f4FontFile;
         c.f4FontLib.clear();
         c.f4FontLib.addAll(f4FontLib);
@@ -335,9 +362,20 @@ public final class MoriConfig {
         f1Cover = true;
         f1Title = false;
         f1Artist = false;
-        // ── F3/F5 是后续批次功能，宿主侧**尚未消费**这两个开关 ──────────────
-        //    不再强制归零：设置页把它们作为偏好持久化，用户重开设置页仍能看到上次选择。
-        //    真正生效要等 FeatureF3 / FeatureF5。
+        // ── F3 液态玻璃 ────────────────────────────────────────────────
+        if (f3Mode == null || (!f3Mode.equals("regular") && !f3Mode.equals("clear"))) {
+            f3Mode = "regular";
+        }
+        if (f3Blur < 0) f3Blur = 0;
+        if (f3Blur > 100) f3Blur = 100;
+        if (f3Tint < 0) f3Tint = 0;
+        if (f3Tint > 100) f3Tint = 100;
+        if (f3Coverage == null
+                || (!f3Coverage.equals("panels") && !f3Coverage.equals("full"))) {
+            f3Coverage = "panels";
+        }
+        // F2 没壁纸时 F3 语义上不可用（§八）；这里不强制关开关，只由能力层跳过。
+        // F5 仍是后续批次，偏好可持久化。
     }
 
     // ── JSON ────────────────────────────────────────────────────────
@@ -362,6 +400,12 @@ public final class MoriConfig {
             o.put("f2AccentStyle", f2AccentStyle);
             o.put("f2PageAlpha", f2PageAlpha);
             o.put("f3Enabled", f3Enabled);
+            o.put("f3Mode", f3Mode);
+            o.put("f3Blur", f3Blur);
+            o.put("f3Tint", f3Tint);
+            o.put("f3Specular", f3Specular);
+            o.put("f3Coverage", f3Coverage);
+            o.put("f3Rim", f3Rim);
             o.put("f4Enabled", f4Enabled);
             o.put("f4FontFamily", f4FontFamily);
             o.put("f4FontFile", f4FontFile);
@@ -422,6 +466,12 @@ public final class MoriConfig {
             c.f2AccentStyle = o.optString("f2AccentStyle", "TonalSpot");
             c.f2PageAlpha = o.optInt("f2PageAlpha", 55);
             c.f3Enabled = o.optBoolean("f3Enabled", false);
+            c.f3Mode = o.optString("f3Mode", "regular");
+            c.f3Blur = o.optInt("f3Blur", 38);
+            c.f3Tint = o.optInt("f3Tint", 66);
+            c.f3Specular = o.optBoolean("f3Specular", true);
+            c.f3Coverage = o.optString("f3Coverage", "panels");
+            c.f3Rim = o.optBoolean("f3Rim", false);
             c.f4Enabled = o.optBoolean("f4Enabled", false);
             c.f4FontFamily = o.optString("f4FontFamily", "");
             c.f4FontFile = o.optString("f4FontFile", "");
@@ -494,6 +544,9 @@ public final class MoriConfig {
                 + ",blur=" + f2Blur + ",playBlur=" + f2PlayBlur
                 + ",accent=" + f2Accent + "/" + f2AccentStyle
                 + ",pageA=" + f2PageAlpha + ")"
+                + " F3=" + f3Enabled + "(" + f3Mode + ",blur=" + f3Blur
+                + ",tint=" + f3Tint + ",spec=" + f3Specular
+                + ",cov=" + f3Coverage + ",rim=" + f3Rim + ")"
                 + " F4=" + f4Enabled + "(fam=" + (f4FontFamily.isEmpty() ? "-" : f4FontFamily)
                 + ",file=" + (f4FontFile.isEmpty() ? "none" : "set") + ")"
                 + " lang=" + lang + " hideIcon=" + hideLauncherIcon

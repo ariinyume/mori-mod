@@ -1,5 +1,10 @@
 pluginManagement {
     repositories {
+        // 国内镜像优先：直连 mavenCentral 偶发 403。
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -24,6 +29,9 @@ dependencyResolutionManagement {
         if (m2Local) {
             maven { url 'file:///' + m2Local.replace('\\', '/') }
         }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
         mavenCentral()
     }

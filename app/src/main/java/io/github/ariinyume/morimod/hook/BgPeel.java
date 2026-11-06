@@ -1153,6 +1153,7 @@ public final class BgPeel {
     public static void install(ClassLoader cl) {
         hookDrawable(cl, CLS_BG_DRAWABLE, true);
         hookDrawable(cl, CLS_BG_IMAGE, false);
+        hookColorDrawable();
         hookGradientView(cl);
         hookViewDraw(cl);
         hookExpoImage(cl);
@@ -1173,6 +1174,7 @@ public final class BgPeel {
         //   （日志里 `paint play blur big` 始终 0 条就是这个原因）。
         //   唯一能拦住它的地方是 {@code TextureView#draw(Canvas)}（父层 dispatchDraw 会调）。
         hookTextureView(cl);
+        hookDraweeCover(cl);
         hookImageBlur(cl);
         // ★★★ v0.1.42（r13）：**宿主自带的毛玻璃层（expo-blur）必须一起关掉**。
         //   这一条是「为什么有的面板/页面能做上、有的做不上」的最后一个缺口。
@@ -1189,6 +1191,7 @@ public final class BgPeel {
         // ★★★ v0.1.85（r109 路径 2）：页面内容「挂载完成」这一事件上重绘一次
         hookScreenContentAdded(cl);
         hookScreenSwitch(cl);
+        hookPagerLight(cl);
         // ★★★ v0.1.77（r91）：空页看门狗（只观测，不改任何绘制）
         // startBlankWatch();
     }
@@ -1761,12 +1764,23 @@ public final class BgPeel {
         }
     }
 
-    /** 页面内容挂上来的那一刻：40ms 后重绘这一页的子树（播放页不碰）。 */
+    /** 页面内容挂上来的那一刻：本应 40ms/260ms 两拍重绘（播放页不碰）。 */
     private static void repaintPageAfterMount(final View page) {
+        // v0.1.118：底栏 / 媒体库选项卡切换时连发两拍 invalidate，
+        // 实测宿主整页重录 20~40ms。壁纸稳态不靠挂载重绘，整段停用。
+        if (page != null) {
+            /* kept for signature / future toggle */
+        }
+        return;
+    }
+
+    /** @deprecated 挂载重绘已停用；保留原实现备查。 */
+    @SuppressWarnings("unused")
+    private static void repaintPageAfterMountLegacy(final View page) {
         try {
             if (page == null || !page.isShown() || page.getWidth() <= 0) return;
             long now = System.currentTimeMillis();
-            if (now - sMountRepaintAt < 150L) return;
+            if (now - sMountRepaintAt < 400L) return;
             // 播放页一律不碰（封面救援依赖它自己的时序）
             if (isPlayWindow(page) || playContext(page)) return;
             sMountRepaintAt = now;
@@ -1912,6 +1926,7 @@ public final class BgPeel {
     private static void armPageRepaint(final View anyScreenView, final String st) {
         try {
             sPageSwitchAt = System.currentTimeMillis();
+            beginLightNav(360);
             sSnapFrom = sPageSwitchAt;
             // ★ 空窗遮罩已按用户要求整条回退（r106 用户第 2 条：
             //   「现在变成了所有页面切换都有了右滑的效果，而且还会卡顿一下，比之前更差」）。
@@ -1930,6 +1945,52 @@ public final class BgPeel {
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    /** 切页降载截止时间戳（uptime ms）。 */
+    private static volatile long sLightUntil;
+
+    /** 底栏 / 媒体库选项卡切换后短暂降载：只保封面遮罩与大底。 */
+    private static void beginLightNav(int ms) {
+        if (ms < 80) ms = 80;
+        long until = System.currentTimeMillis() + (long) ms;
+        if (until > sLightUntil) sLightUntil = until;
+    }
+
+    private static boolean lightNav() {
+        return System.currentTimeMillis() < sLightUntil;
+    }
+
+    /**
+     * 媒体库「作品 / 社团 / 声优 / …」走 ViewPager(2) 切页，不一定触发 Screen.setActivityState。
+     */
+    private static void hookPagerLight(ClassLoader cl) {
+        String[] names = {
+                "androidx.viewpager2.widget.ViewPager2",
+                "androidx.viewpager.widget.ViewPager",
+                "android.support.v4.view.ViewPager",
+        };
+        int n = 0;
+        for (String name : names) {
+            try {
+                Class<?> cls = Class.forName(name, false, cl);
+                for (final java.lang.reflect.Method m : cls.getDeclaredMethods()) {
+                    if (!"setCurrentItem".equals(m.getName())) continue;
+                    try {
+                        XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                            @Override
+                            protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                                beginLightNav(360);
+                            }
+                        });
+                        n++;
+                    } catch (Throwable ignored) {
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        log("pager light hook -> " + n);
     }
 
     private static String name0(Object o) {
@@ -1968,6 +2029,9 @@ public final class BgPeel {
         try {
             synchronized (SHADOWED) {
                 SHADOWED.clear();
+            }
+            synchronized (ACCENT_SEEN) {
+                ACCENT_SEEN.clear();
             }
             LIGHT_BG.clear();
             refreshMaskPaint();
@@ -2139,6 +2203,34 @@ public final class BgPeel {
      *                      渐变层不能要求 —— {@code BackgroundImageDrawable} 的
      *                      {@code getOpacity()} 不一定报 OPAQUE，卡它等于白钩。
      */
+    /**
+     * ColorDrawable 也要拦：列表白底 / PurePlay 实心主题色经常不是 RN BackgroundDrawable，
+     * 只钩后者会留下实心色块，半透遮罩永远被盖住。
+     */
+    private static void hookColorDrawable() {
+        try {
+            Method draw = android.graphics.drawable.ColorDrawable.class
+                    .getDeclaredMethod("draw", Canvas.class);
+            draw.setAccessible(true);
+            XposedCompat.hookMethod(draw, chain -> {
+                try {
+                    Object self = chain.getThisObject();
+                    if (self instanceof Drawable) {
+                        View plate = ownerView((Drawable) self);
+                        if (plate != null && opaqueCoverPlate(plate, (Drawable) self)) {
+                            return null;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+                return chain.proceed();
+            });
+            log("hooked ColorDrawable#draw");
+        } catch (Throwable t) {
+            log("钩子未装 ColorDrawable: " + t);
+        }
+    }
+
     private static void hookDrawable(ClassLoader cl, String clsName, boolean requireOpaque) {
         try {
             Class<?> cls = XposedCompat.findClass(clsName, cl);
@@ -2155,6 +2247,12 @@ public final class BgPeel {
                     Object self = chain.getThisObject();
                     Object arg0 = chain.getArg(0);
                     if (self instanceof Drawable && arg0 instanceof Canvas) {
+                        // 封面槽的不透明底（列表白块 / PurePlay 纯色块）不要画，
+                        // 改由封面那一层自己铺半透明主题色。
+                        View plate = ownerView((Drawable) self);
+                        if (plate != null && opaqueCoverPlate(plate, (Drawable) self)) {
+                            return null;
+                        }
                         // ★★★ v0.1.41（r12 路径 A）：**玻璃表面只换颜料，不接管绘制**。
                         //   命中 ⇒ 把宿主那支 Paint 的 shader 换成模糊壁纸，
                         //   然后照常 chain.proceed() —— 圆角、位置、裁剪全由宿主自己完成。
@@ -2270,13 +2368,69 @@ public final class BgPeel {
                     Object arg0 = chain.getArg(0);
                     v = self instanceof View ? (View) self : null;
                     cv = arg0 instanceof Canvas ? (Canvas) arg0 : null;
+                    // v0.1.121：切底栏 / 媒体库选项卡时整树重画。小块、非文字、非进度条、
+                    // 非根的层不可能走封面/大底/阴影 —— 直接放行，少跑一串判定。
+                    if (v != null && cv != null && !drawWorkLikely(v)) {
+                        return chain.proceed();
+                    }
+                    // 播放页跑马灯：每帧钉死位移，挡住漏网的 native 动画。
+                    if (v != null) {
+                        TrackSwitchRelief.pinFromDraw(v);
+                    }
                     // ★ r107：「月度回顾」弹窗底色那套改动已按用户要求全部移除
                     //   （两次识别方案都没能在真机上生效：那层底图画一次就不再重画，
                     //    而这棵 Dialog 树里既扫不到文字层、也没有稳定可用的 pager 信号）。
                     // ★★★ v0.1.44（r15 用户第 6 条）：防偷窥封面块记下来，
                     //   等**宿主画完**再叠强调色罩（见 privacyWash）。
-                    // ★★★ v0.1.88（r112）：作品封面屏蔽（View 路径的图片）
-                    if (cv != null && coverBlocked(v)) return null;
+                    // 作品封面屏蔽：不画原图，按需要铺一层半透明主题色。
+                    if (cv != null && coverBlocked(v)) {
+                        paintCoverMask(cv, v);
+                        return null;
+                    }
+                    // PurePlay / 单列：半透遮罩若叠在实心白/主题底上，肉眼仍是实心块。
+                    // 这里暂时藏起 background，再强制铺半透；宽条（回顾文案底）绝不进这条。
+                    if (cv != null && coverBlockOn()
+                            && maybeCoverSlot(v)
+                            && opaqueCoverPlate(v) && !splashWhitePlate(v)) {
+                        Drawable bg = null;
+                        boolean hid = false;
+                        try {
+                            bg = v.getBackground();
+                            if (bg != null && bg.isVisible()) {
+                                bg.setVisible(false, false);
+                                hid = true;
+                            }
+                            Object out = chain.proceed();
+                            paintCoverMask(cv, v, true);
+                            return out;
+                        } catch (Throwable t) {
+                            paintCoverMask(cv, v, true);
+                            return null;
+                        } finally {
+                            if (hid && bg != null) {
+                                try {
+                                    bg.setVisible(true, false);
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                    }
+                    // v0.1.122：切页动画窗口内只保封面遮罩 +（Drawable 路径的）大底，
+                    // 阴影 / 强调色 / 叶子换底 / 洗色全部跳过。
+                    if (lightNav()) {
+                        Object r = chain.proceed();
+                        long tEnd = System.nanoTime();
+                        try {
+                            long total = (tEnd - tHook) / 1000000L;
+                            if (total >= 10L) {
+                                log("slowdraw " + total + "ms（light）"
+                                        + (v == null ? "?" : name(v) + " "
+                                        + v.getWidth() + "x" + v.getHeight()));
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                        return r;
+                    }
                     wash = v != null && cv != null && privacyWash(v);
                     // ★★★ v0.1.49：**封面外框那一层也要罩**（用户提议「直接替换掉宿主叠加的蒙层」）。
                     //   真机日志把结构打得很清楚：
@@ -2378,20 +2532,16 @@ public final class BgPeel {
                                 forceAccentSmallText((TextView) v);
                             }
                         } else if (rescueCover(v)) {
-                            // ★★★ v0.1.40（r45 用户第 7 条）：**封面这条路绝不接管绘制**。
-                            //   以前这里还会走 swapLeaf / paintSheetPanel —— 而
-                            //   `swapLeaf` 对「大块图片层」会走 `paintAtmos` / `paintPlayFallback`，
-                            //   于是**作品封面被替换成播放页的背景图**，
-                            //   用户看到的正是「作品封面显示区域是没加模糊的自定义背景」，
-                            //   再到这一轮就变成「封面死都不显示」。
-                            //   封面是内容图，唯一该做的事就是把 alpha 修回 1。
                             noteCoverKept();
-                        } else if (swapLeaf(v, cv)) {
-                            return null;   // 壁纸已经画在这块位置上，宿主原来那层不画
-                        } else {
-                            // 面板容器（有子 View 的底部面板）：只把**面板这一块矩形**
-                            // 涂成「背景 + 高斯模糊」，子内容照常由宿主画在上面。
-                            paintSheetPanel(v, cv);
+                        } else if (v.getWidth() * 100 >= (long) sSW * 70
+                                || (long) v.getWidth() * v.getHeight() * 100
+                                >= (long) sSW * sSH * 20) {
+                            // 小块（列表单元格 / 按钮）不进 swapLeaf / sheet，切页少做无用功。
+                            if (swapLeaf(v, cv)) {
+                                return null;
+                            } else {
+                                paintSheetPanel(v, cv);
+                            }
                         }
                     }
                 } catch (Throwable ignored) {
@@ -2452,6 +2602,28 @@ public final class BgPeel {
         } catch (Throwable t) {
             log("钩子未装 android.view.View#draw: " + t);
         }
+    }
+
+    /**
+     * v0.1.121：这一层值不值得进封面 / 大底 / 阴影 / 洗色热路径。
+     * 文字、进度条、窗口根、封面尺寸候选、大底候选以外的小块直接放行。
+     */
+    private static boolean drawWorkLikely(View v) {
+        if (v instanceof TextView) return true;
+        if (v instanceof android.widget.ProgressBar) return true;
+        try {
+            if (v.getRootView() == v) return true;
+        } catch (Throwable ignored) {
+        }
+        int w = v.getWidth();
+        int h = v.getHeight();
+        if (w <= 0 || h <= 0) return false;
+        // 封面图 / 挖实心底 / wash 外框的下限
+        if (w >= 140 && h >= 96) return true;
+        if (sSW <= 0 || sSH <= 0) return false;
+        // swapLeaf / sheet 门槛（与 View#draw 里一致）
+        return w * 100 >= (long) sSW * 70
+                || (long) w * h * 100 >= (long) sSW * sSH * 20;
     }
 
     /**
@@ -2519,9 +2691,10 @@ public final class BgPeel {
                         //   改回「宿主照画 + 我们在上面叠色」，误判最坏只是颜色偏一点，
                         //   绝不会把内容吃掉。
                         // ① 宿主的「封面模糊底图」（blurRadius > 0）：换成 壁纸+用户模糊档
-                        // ★★★ v0.1.88（r112 用户第 2 条）：**作品封面屏蔽**——整层不画，位置留空，点击照旧
+                        // 作品封面屏蔽：不画原图。底下已有半透明底时留空，否则自己铺主题色。
                         if (coverBlocked(v)) {
                             sPainted = true;
+                            if (cv != null) paintCoverMask(cv, v);
                             traceCover(v, "coverBlock");
                             return null;
                         }
@@ -2632,6 +2805,13 @@ public final class BgPeel {
                         Canvas c = (Canvas) a0;
                         int w = v.getWidth();
                         int h = v.getHeight();
+                        // PurePlay 播放页的方形封面常走 Skia，不进 ImageView。
+                        // 开了封面屏蔽时，按封面尺寸铺半透明主题色，满屏底仍然只换壁纸。
+                        if (w > 0 && h > 0 && coverBlocked(v)) {
+                            paintCoverMask(c, v);
+                            traceCover(v, "coverBlock-skia");
+                            return null;
+                        }
                         if (w > 0 && h > 0
                                 && v.getAlpha() >= 0.05f
                                 // ★★★ v0.1.58（r58 adb 实测）：这个宿主的播放页背景是一张
@@ -3643,6 +3823,7 @@ public final class BgPeel {
      */
     private static boolean dropVeil(View v, Canvas c) {
         if (!sArmed) return false;
+        if (inReviewUi(v)) return false;
         if (sSW <= 0 || sSH <= 0) return false;
         int w;
         int h;
@@ -3747,6 +3928,7 @@ public final class BgPeel {
      */
     private static boolean paintAtmos(View v, Canvas c) {
         if (!sArmed) return false;
+        if (inReviewUi(v)) return false;
         if (sSW <= 0 || sSH <= 0) return false;
         int w;
         int h;
@@ -5876,8 +6058,40 @@ public final class BgPeel {
     private static void ensureShadow(TextView tv) {
         if (!sArmed) return;
         try {
+            CharSequence cs = null;
+            try {
+                cs = tv.getText();
+                if (cs != null && cs.length() <= 1) return;
+            } catch (Throwable ignored) {
+            }
             float ts = tv.getTextSize();
             if (ts <= 0f) return;
+            float radius = ts * TEXT_SHADOW_RADIUS_RATIO;
+            // 超宽跑马灯字条：必须保留阴影；只是不要为它反复 invalidate。
+            boolean wideMarquee = sSW > 0 && tv.getWidth() > sSW + sSW / 5;
+            Float last = SHADOWED.get(tv);
+            // v0.1.121/122：半径缓存命中时仍写回 Paint（不 invalidate）。
+            // 开滚 / 硬件层常把阴影清掉；每帧 setShadowLayer 很轻，能稳住曲名阴影。
+            if (last != null && Math.abs(last - radius) < 0.01f) {
+                if (last > 0f) {
+                    Paint p0 = tv.getPaint();
+                    if (p0 != null) p0.setShadowLayer(radius, 0f, 0f, shadowColor());
+                }
+                return;
+            }
+            // 回顾文案 / 白底按钮字不加阴影。
+            if (cueHit(tv, REVIEW_CARD_CUES) || cueHit(tv, MONTHLY_REVIEW_CUES)
+                    || cueHit(tv, BUTTON_CUES)) {
+                if (last != null && last > 0f) {
+                    Paint p = tv.getPaint();
+                    if (p != null) p.clearShadowLayer();
+                    SHADOWED.put(tv, 0f);
+                    if (!wideMarquee) tv.invalidate();
+                } else {
+                    SHADOWED.put(tv, 0f);
+                }
+                return;
+            }
             // ★★★ v0.1.42（r13 用户第 2 条）：**阴影不再看「坐在什么底上」**。
             //   原来那条判据是想「亮底上不打黑阴影」，但它量化的是<b>宿主声明的颜色</b>
             //   —— 而我们已经把这棵树的底色换成了壁纸，甚至把原来那层深色底 drop 掉了
@@ -5886,18 +6100,18 @@ public final class BgPeel {
             //   ⇒ 主动 clearShadowLayer() ⇒ 用户连着几轮说的「选中粗体没有阴影」。
             //   阴影只是「黑、80%、半径 = 字号 8%」，在真·浅底上几乎看不出来，
             //   在壁纸上却是可读性的关键 ⇒ 一律加，不再做二选一。
-            boolean light = onLightSurface(tv);      // 只用于日志
-            float radius = ts * TEXT_SHADOW_RADIUS_RATIO;
-            // 探针③：把「这个 TextView 被判成什么」记下来（按签名去重，不会耗尽预算）。
-            if (logOnce("sh:" + signature(tv), "shadow ts=" + (int) ts + " r=" + (int) radius
-                    + " light=" + (light ? 1 : 0)
-                    + " dark=" + (textIsDark(tv) ? 1 : 0)
-                    + " tx=#" + String.format(java.util.Locale.ROOT, "%08x", curColor(tv))
-                    + " n=" + textOf(tv))) {
-                // 已记过
+            // 探针只在首次见到该签名时采样；稳态切页不再跑 onLightSurface。
+            String shKey = "sh:" + signature(tv);
+            if (!ONCE.containsKey(shKey) && sShadowLogs < SHADOW_LOG_BUDGET) {
+                boolean light = onLightSurface(tv);
+                if (logOnce(shKey, "shadow ts=" + (int) ts + " r=" + (int) radius
+                        + " light=" + (light ? 1 : 0)
+                        + " dark=" + (textIsDark(tv) ? 1 : 0)
+                        + " tx=#" + String.format(java.util.Locale.ROOT, "%08x", curColor(tv))
+                        + " n=" + textOf(tv))) {
+                    sShadowLogs++;
+                }
             }
-            Float last = SHADOWED.get(tv);
-            if (last != null && Math.abs(last - radius) < 0.01f) return;
             Paint p = tv.getPaint();
             if (p == null) return;
             if (radius <= 0f) {
@@ -5906,7 +6120,8 @@ public final class BgPeel {
                 p.setShadowLayer(radius, 0f, 0f, shadowColor());
             }
             SHADOWED.put(tv, radius);
-            tv.invalidate();
+            // 超宽条只改 Paint，等本帧/下帧自己画出来；invalidate 会放大切页抖动。
+            if (!wideMarquee) tv.invalidate();
         } catch (Throwable ignored) {
         }
     }
@@ -6076,40 +6291,111 @@ public final class BgPeel {
     private static final java.util.Set<String> BIG_SURFACE =
             java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private static volatile int sBigSurfLogs;
-    private static final int BIG_SURF_LOG_BUDGET = 26;
+    private static final int BIG_SURF_LOG_BUDGET = 48;
 
     /**
      * ★★★ v0.1.31 诊断：把所有「够大的底色」连形状一起打出来（限 26 种）。
      *
      * <p>这一条是留给下一轮的<b>终局证据</b>：不管玻璃成没成，日志里都会有一行
      * 「这块底长什么样」——宽高 / 不透明度 / 圆角 / 颜色 / 是否命中
-     * {@link #isGlassSurface}。以后要调阈值，看这一份表就够了，不用再靠猜。
+     * {@link #isGlassSurface}。以后要调细则，看这一份表就够了，不用再靠猜。
+     *
+     * <p>★★★ v0.1.111（S0）：额外输出 {@code kind=} 分类（panel / mini / icon /
+     * tab / nav / other）与 {@code leaf=}，给 chrome 扩面做面清单实证。
+     * <b>分类只写日志，不改绘制</b>（S4 等实证后再开）。
      */
     private static void noteBigSurface(View v, Drawable d, Rect b) {
         if (sBigSurfLogs >= BIG_SURF_LOG_BUDGET) return;
         if (sSW <= 0 || sSH <= 0) return;
         int w = b.width();
         int h = b.height();
-        if (w * 100 < (long) sSW * GLASS_MIN_W_PCT) return;
-        if (h * 100 < (long) sSH * (GLASS_MIN_H_PCT - 2)) return;
+        // S0：几何预筛（廉价）—— 面板尺寸 或 chrome 候选尺寸才继续
+        boolean panelSized = w * 100 >= (long) sSW * GLASS_MIN_W_PCT
+                && h * 100 >= (long) sSH * (GLASS_MIN_H_PCT - 2);
+        boolean chromeSized = !panelSized && looksLikeChromeSize(v, b);
+        if (!panelSized && !chromeSized) return;
+        String kind = classifySurfaceKind(v, d, b, panelSized);
         String key;
         try {
-            key = v.getClass().getSimpleName() + "/" + w + "x" + h;
+            key = v.getClass().getSimpleName() + "/" + w + "x" + h + "/" + kind;
         } catch (Throwable t) {
             return;
         }
         if (!BIG_SURFACE.add(key)) return;
         sBigSurfLogs++;
         Integer solid = solidColorOf(d);
+        boolean leaf = false;
+        try {
+            leaf = !(v instanceof android.view.ViewGroup)
+                    || ((android.view.ViewGroup) v).getChildCount() == 0;
+        } catch (Throwable ignored) {
+        }
+        boolean glass = isGlassSurface(v, d, b);
+        if (glass) kind = "panel";
         log("surface " + key + " top=" + topOf(v) + " op=" + d.getOpacity()
                 + " r=" + (int) maxRadiusOf(d)
                 + " c=" + (solid == null ? "?" : String.format("#%08X", solid))
+                + " kind=" + kind + " leaf=" + (leaf ? 1 : 0)
                 + " scr=" + (insideScreen(v) ? 1 : 0)
                 + " bs=" + (insideBottomSheet(v) ? 1 : 0)
                 + " dlg=" + (inDialogWindow(v) ? 1 : 0)
                 + " cov=" + (coveredByGlass(v) ? 1 : 0)
                 + " chain=" + chainOf(v)
-                + (isGlassSurface(v, d, b) ? " => GLASS" : " => plain"));
+                + (glass ? " => GLASS" : " => plain"));
+    }
+
+    /** 廉价几何预筛：高在 36~80dp 或满宽贴顶/贴底的矮条，才值得做 chrome 分类。 */
+    private static boolean looksLikeChromeSize(View v, Rect b) {
+        if (v == null || b == null || sSW <= 0 || sSH <= 0) return false;
+        int h = b.height();
+        int w = b.width();
+        if (h <= 0 || w <= 0) return false;
+        // 绝对像素粗筛：约 36~80dp @3x ≈ 108~240px；也接受矮满宽条
+        if (h > sSH / 5) return false;
+        if (h < 80 && w * 100 < (long) sSW * 90) {
+            // 小块：只收近方形 / 矮胶囊
+            if (h < 90 || w > h * 4) return false;
+        }
+        return true;
+    }
+
+    /**
+     * S0 / S4 面分类（方案 §2.6.1 / §2.7.1）。只用于日志，<b>不驱动绘制</b>。
+     * 不调用 {@link #isGlassSurface}（热路径）；panel 由调用方事后覆盖。
+     */
+    private static String classifySurfaceKind(View v, Drawable d, Rect b, boolean panelSized) {
+        if (v == null || d == null || b == null || b.isEmpty()) return "other";
+        if (sSW <= 0 || sSH <= 0) return panelSized ? "other" : "other";
+        int w = b.width();
+        int h = b.height();
+        float dens = 3f;
+        try {
+            dens = v.getResources().getDisplayMetrics().density;
+            if (dens < 0.5f) dens = 3f;
+        } catch (Throwable ignored) {
+        }
+        float hDp = h / dens;
+        float wDp = w / dens;
+        float r = maxRadiusOf(d);
+        boolean fullW = w * 100 >= (long) sSW * 94;
+        boolean bottom = false;
+        boolean top = false;
+        try {
+            int[] loc = LOC.get();
+            v.getLocationInWindow(loc);
+            bottom = loc[1] + h >= sSH - sEdgeBottom - 8;
+            top = loc[1] <= sEdgeTop + 8;
+        } catch (Throwable ignored) {
+        }
+        if (bottom && hDp >= 44f && hDp <= 56f && r >= h * 0.35f) return "mini";
+        if (bottom && fullW && hDp >= 56f && hDp <= 80f) return "tab";
+        if (top && fullW && hDp >= 40f && hDp <= 52f) return "nav";
+        float aspect = wDp > 0.1f ? hDp / wDp : 0f;
+        if ((aspect >= 0.9f && aspect <= 1.1f && wDp >= 36f && wDp <= 48f)
+                || (hDp <= 44f && wDp >= 36f && wDp <= 120f && r >= h * 0.3f)) {
+            return "icon";
+        }
+        return panelSized ? "panel-cand" : "other";
     }
 
     /**
@@ -6610,16 +6896,30 @@ public final class BgPeel {
      * <p>只动 ≤18sp 的字；已经是强调色 / 近白 / 关着开关的一律不动。
      * 走 {@code setTextColor(int)} 会再进我们的钩子，收敛后 n==c 即停。
      */
+    /** 小字强调色：同一 TextView 在同一 currentColor 上已判定过就不再算。 */
+    private static final java.util.Map<TextView, Integer> ACCENT_SEEN =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static float sScaledDensity;
+
     private static void forceAccentSmallText(TextView tv) {
         if (!AccentColor.on() || tv == null) return;
         try {
-            float dens = tv.getResources().getDisplayMetrics().scaledDensity;
+            float dens = sScaledDensity;
+            if (dens <= 0f) {
+                dens = tv.getResources().getDisplayMetrics().scaledDensity;
+                if (dens > 0f) sScaledDensity = dens;
+            }
             if (dens <= 0f) return;
             float sp = tv.getTextSize() / dens;
             if (sp > 18f) return;
             int c = tv.getCurrentTextColor();
+            Integer seen = ACCENT_SEEN.get(tv);
+            if (seen != null && seen == c) return;
             int n = AccentColor.remapSmallText(c);
-            if (n == c) return;
+            if (n == c) {
+                ACCENT_SEEN.put(tv, c);
+                return;
+            }
             // 若当前是 ColorStateList，setTextColor(int) 会把它摊成单色 ——
             // 底栏选中态会丢。只在「此刻颜色仍是宿主紫族 / 中性半透明」时动手。
             int a = (c >>> 24) & 0xff;
@@ -6628,9 +6928,16 @@ public final class BgPeel {
             int b = c & 0xff;
             boolean neutral = (Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b))) <= 6;
             boolean purpleish = b > r && r >= g;
-            if (!neutral && !purpleish) return;
-            if (neutral && a == 0xff) return;   // 不透明纯黑正文
+            if (!neutral && !purpleish) {
+                ACCENT_SEEN.put(tv, c);
+                return;
+            }
+            if (neutral && a == 0xff) {   // 不透明纯黑正文
+                ACCENT_SEEN.put(tv, c);
+                return;
+            }
             tv.setTextColor(n);
+            ACCENT_SEEN.put(tv, n);
         } catch (Throwable ignored) {
         }
     }
@@ -7011,8 +7318,21 @@ public final class BgPeel {
      */
     private static final int GLASS_BLUR_PCT = 38;
 
-    /** 面板玻璃底图（清晰壁纸模糊 {@link #GLASS_BLUR_PCT}% 后的缓存）。 */
+    /** 面板玻璃底图（清晰壁纸模糊 {@link #GLASS_BLUR_PCT}% 后的缓存；F3 关时用）。 */
     private static volatile Bitmap sWpGlassBmp;
+
+    /** F3 液态玻璃双档缓存（方案 S2）。 */
+    private static volatile Bitmap sWpGlassRegular;
+    private static volatile Bitmap sWpGlassClear;
+    /** 烘焙指纹：换壁纸 / 改 blur·tint·mode 时作废。 */
+    private static volatile String sGlassBakeFp = "";
+
+    /** 单帧玻璃块数 / 面积预算（方案 S6）。 */
+    private static final int GLASS_BLOCK_CAP = 24;
+    private static final float GLASS_AREA_CAP = 2.2f;
+    private static volatile long sGlassFrameToken;
+    private static volatile int sGlassFrameBlocks;
+    private static volatile long sGlassFrameArea;
 
     /** 玻璃失败诊断的已打条数。 */
     private static int sGlassFailLogs;
@@ -7288,21 +7608,20 @@ public final class BgPeel {
     }
 
     /**
-     * 玻璃表面该用哪张底图：<b>单次模糊的条带档</b>，其余按两级兜底。
+     * 玻璃表面该用哪张底图。
      *
-     * <p>★★★ v0.1.39（r44 用户第 1 条）：<b>撤销 v0.1.38 的「糊两遍」</b>。
+     * <p>F3 关：既有磨砂（{@link #GLASS_BLUR_PCT}% 单次模糊，原分辨率）。
+     * F3 开：{@link LiquidGlass#bake} 双档降采样缓存（方案 S2）；draw 里只取缓存。
      *
-     * <p>v0.1.38 为了「看得出是毛玻璃」把面板底换成 {@code FeatureF2.glassBitmap}
-     * —— 同一张壁纸<主>连续糊两遍</b>（等效半径翻倍还多）。真机效果被用户一句话否掉：
-     * 「概述页面的高斯模糊和之前的效果不一样了」。
-     * 双次模糊把壁纸糊成了色块，面板里除了文字什么结构都看不出来，
-     * 反而失去了「透过毛玻璃能看到背景轮廓」的质感。
-     *
-     * <p>⇒ 回到 v0.1.37 及之前一直在用的 {@code sWpBarBmp}
-     * （壁纸 + {@link FeatureF2#BAR_BLUR_PCT} 单次模糊，20%），
-     * 也就是用户认可的那一版观感。{@code sWpGlassBmp} 不再参与绘制。
+     * <p>★★★ v0.1.39：撤销「糊两遍」；F3 关时仍走单次 {@link #GLASS_BLUR_PCT}% 模糊。
      */
     private static Bitmap glassBmp(View v) {
+        MoriConfig cfg = RemoteConfig.get();
+        if (cfg != null && cfg.f3Enabled) {
+            Bitmap liquid = liquidGlassBmp(cfg);
+            if (liquid != null) return liquid;
+            // bake 失败 → 退回旧磨砂，绝不裸奔清晰壁纸
+        }
         Bitmap cached = sWpGlassBmp;
         if (cached != null && !cached.isRecycled()) return cached;
         Bitmap base = isPlayWindow(v) ? playBmp() : sWpBmp;
@@ -7319,6 +7638,95 @@ public final class BgPeel {
         if (g == null || g.isRecycled() || g == base) return null;
         sWpGlassBmp = g;
         return g;
+    }
+
+    /** 取当前 F3 档位的烘焙位图（已在 {@link #prebakeLiquidGlass} 预热）。 */
+    private static Bitmap liquidGlassBmp(MoriConfig cfg) {
+        if (cfg == null || !cfg.f3Enabled) return null;
+        LiquidGlass.Mode mode = LiquidGlass.Mode.of(cfg.f3Mode);
+        Bitmap hit = mode == LiquidGlass.Mode.CLEAR ? sWpGlassClear : sWpGlassRegular;
+        if (hit != null && !hit.isRecycled()) return hit;
+        // 热路径兜底：预烘焙还没跑完时现算一次（仍缓存）
+        prebakeLiquidGlass(cfg, sWpBmp);
+        hit = mode == LiquidGlass.Mode.CLEAR ? sWpGlassClear : sWpGlassRegular;
+        return (hit != null && !hit.isRecycled()) ? hit : null;
+    }
+
+    /**
+     * 在 applyCfg / armFlip 时机预烘焙双档液态玻璃位图。
+     * <b>绝不能在 draw 里首次触发重计算</b>（方案 §三 / S2）。
+     */
+    private static void prebakeLiquidGlass(MoriConfig cfg, Bitmap base) {
+        if (cfg == null || !cfg.f3Enabled) {
+            recycleGlass(sWpGlassRegular);
+            recycleGlass(sWpGlassClear);
+            sWpGlassRegular = null;
+            sWpGlassClear = null;
+            sGlassBakeFp = "";
+            return;
+        }
+        if (base == null || base.isRecycled()) return;
+        String fp = base.getWidth() + "x" + base.getHeight()
+                + "@" + System.identityHashCode(base)
+                + "|b" + cfg.f3Blur + "|t" + cfg.f3Tint
+                + "|m" + cfg.f3Mode;
+        if (fp.equals(sGlassBakeFp)
+                && sWpGlassRegular != null && !sWpGlassRegular.isRecycled()
+                && sWpGlassClear != null && !sWpGlassClear.isRecycled()) {
+            return;
+        }
+        long t0 = android.os.SystemClock.uptimeMillis();
+        Bitmap reg = null;
+        Bitmap clr = null;
+        try {
+            int blurR = cfg.f3Blur > 0 ? cfg.f3Blur : LiquidGlass.BLUR_REGULAR;
+            int blurC = Math.max(8, blurR * LiquidGlass.BLUR_CLEAR / LiquidGlass.BLUR_REGULAR);
+            reg = LiquidGlass.bake(base, LiquidGlass.Mode.REGULAR, blurR, cfg.f3Tint);
+            clr = LiquidGlass.bake(base, LiquidGlass.Mode.CLEAR, blurC, Math.min(100, cfg.f3Tint + 20));
+        } catch (Throwable ignored) {
+        }
+        recycleGlass(sWpGlassRegular);
+        recycleGlass(sWpGlassClear);
+        sWpGlassRegular = reg;
+        sWpGlassClear = clr;
+        // 无论成败都记下指纹，避免 apply 轮询里反复重算（失败时 glassBmp 退回旧磨砂）
+        sGlassBakeFp = fp;
+        long dt = android.os.SystemClock.uptimeMillis() - t0;
+        log("liquid bake " + (reg == null ? "-" : reg.getWidth() + "x" + reg.getHeight())
+                + "/" + (clr == null ? "-" : clr.getWidth() + "x" + clr.getHeight())
+                + " " + dt + "ms tint=" + cfg.f3Tint);
+    }
+
+    private static void recycleGlass(Bitmap b) {
+        if (b == null || b.isRecycled()) return;
+        try {
+            b.recycle();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 单帧玻璃像素 / 块数预算（方案 S6）。超了只允许「有 tint 的缓存位图」，不再开高光。 */
+    private static boolean glassBudgetOk(Rect b, boolean[] outSpecularOk) {
+        long token = android.os.SystemClock.uptimeMillis() / 16L; // ~一帧
+        if (token != sGlassFrameToken) {
+            sGlassFrameToken = token;
+            sGlassFrameBlocks = 0;
+            sGlassFrameArea = 0L;
+        }
+        if (sGlassFrameBlocks >= GLASS_BLOCK_CAP) {
+            if (outSpecularOk != null && outSpecularOk.length > 0) outSpecularOk[0] = false;
+            return false;
+        }
+        long area = (long) b.width() * b.height();
+        long screen = Math.max(1L, (long) sSW * sSH);
+        if (sGlassFrameArea + area > (long) (screen * GLASS_AREA_CAP)) {
+            if (outSpecularOk != null && outSpecularOk.length > 0) outSpecularOk[0] = false;
+            return false;
+        }
+        sGlassFrameBlocks++;
+        sGlassFrameArea += area;
+        if (outSpecularOk != null && outSpecularOk.length > 0) outSpecularOk[0] = true;
+        return true;
     }
 
     /** 玻璃成功日志条数 / 预算（v0.1.41 探针①）。 */
@@ -7341,6 +7749,12 @@ public final class BgPeel {
         Rect b = d.getBounds();
         if (b == null || b.isEmpty()) return null;
         if (!isGlassSurface(v, d, b)) return null;
+        // S6：块数 / 面积超预算 ⇒ 本帧不再开新玻璃
+        boolean[] specOk = {true};
+        if (!glassBudgetOk(b, specOk)) {
+            noteGlassFail("budget");
+            return null;
+        }
         Bitmap g = glassBmp(v);
         if (g == null) {
             noteGlassFail("bmp");
@@ -7355,7 +7769,14 @@ public final class BgPeel {
             gw = rgeo[0];
             gh = rgeo[1];
         }
-        GlassPaint.Token tk = GlassPaint.begin(d, v, b, g, gw, gh);
+        MoriConfig cfg = RemoteConfig.get();
+        boolean liquid = cfg != null && cfg.f3Enabled;
+        boolean specular = liquid && cfg.f3Specular && specOk[0];
+        LiquidGlass.Mode mode = liquid
+                ? LiquidGlass.Mode.of(cfg.f3Mode) : LiquidGlass.Mode.REGULAR;
+        float refraction = liquid ? LiquidGlass.REFRACTION_K : 1f;
+        GlassPaint.Token tk = GlassPaint.begin(
+                d, v, b, g, gw, gh, liquid, specular, refraction, mode);
         if (tk == null) {
             noteGlassFail("paint");
             return null;
@@ -7862,15 +8283,20 @@ public final class BgPeel {
         try {
             View v = ownerView(d);
             if (v == null) return false;
-            // ★★★ v0.1.87（r100）：**每次绘制都问一次「页面容器愿不愿意别卸页」**（只跑一次）。
-            //   放在这里而不是看门狗里：这条绘制路径每帧都在走，必定命中，
-            //   不受「2 秒闸/额度」影响（r98/r99 那条一次都没执行就是这个原因）。
+            Rect b = d.getBounds();
+            if (b == null || b.isEmpty()) return false;
+            // 先按尺寸挡掉小块，再做 detach / 记根 —— 切页时这条是热路径。
+            int bw = b.width();
+            int bh = b.height();
+            boolean maybePage = bw * 100 >= (long) sSW * 90
+                    || (long) bw * bh * 100 >= (long) sSW * sSH * 55;
+            boolean maybeGlass = bw * 100 >= (long) sSW * GLASS_MIN_W_PCT
+                    && bh * 100 >= (long) sSH * GLASS_MIN_H_PCT;
+            if (!maybePage && !maybeGlass) return false;
             try {
                 if (!sAttachTried) tryDetachOff(v);
             } catch (Throwable ignored) {
             }
-            // ★ v0.1.75：记住窗口根 —— 心跳里「主动扫进度条」需要一棵树去扫，
-            //   而那时可能还没有活体进度条（正是要解决的场景）。引用失效会自动重建。
             try {
                 java.lang.ref.WeakReference<View> lr = sLastRoot;
                 if (lr == null || lr.get() == null) {
@@ -7878,8 +8304,6 @@ public final class BgPeel {
                 }
             } catch (Throwable ignored) {
             }
-            Rect b = d.getBounds();
-            if (b == null || b.isEmpty()) return false;
             noteBigSurface(v, d, b);
 
             // ★★★ v0.1.29 用户第 2 条（这是「信息卡片挂不上高斯模糊」的真凶）：
@@ -8632,37 +9056,684 @@ public final class BgPeel {
     // ══════════════════════════════════════════════════════════════════
 
     /**
+     * 封面遮罩的不透明度。26/255 = 0x1A，和「类型」底框、播放页开始/暂停按钮同一档淡色。
+     * 只铺这一层颜色，不在封面槽里再画壁纸（壁纸会跟着屏幕钉死，一滑就「卡住」）。
+     */
+    private static final int COVER_VEIL_ALPHA = 26;
+
+    /** 最近见到的主题色 RGB（不含 alpha）。 */
+    private static int sCoverThemeRgb;
+
+    /**
      * 这一层是不是「作品封面」，且当前开着「作品封面屏蔽」。
      *
-     * <p>命中就**整层不画**：那块位置变成空白窗，但 View 本身、布局、点击事件
-     * 全部原样保留 —— 我们只在 {@code draw} 这一步跳过，从不碰触摸分发。
-     *
-     * <h3>判据（全部是几何/结构事实）</h3>
-     * <ul>
-     *   <li>必须是 {@code ImageView}（React 的封面就是 ReactImageView / ExpoImageView）；</li>
-     *   <li>尺寸在「小图标」与「整屏底图」之间：≥180x120 且 ≤55% 屏面积；</li>
-     *   <li>不是模糊底图（{@link #imgKind} = {@code IMG_BLUR}）—— 那是播放页背景，归播放页那套；</li>
-     *   <li>不在弹层 / 面板里（{@link #inFloatingLayer}）—— 下载音轨、简介那些面板不动。</li>
-     * </ul>
-     *
-     * <p>⚠️ 只能按「尺寸 + 是否底图」认封面 ⇒ 声优头像、类型封面这种「也是图片」的东西
-     * 可能被一并遮住。真机上要收紧只能再加容器判据，那需要一次层级 dump。
+     * <p>命中后不画原图，改铺一层淡主题色。圆角交给宿主自己裁。
+     * 开屏 Splash 子树、回顾 / 月度总结、小方图标、通栏氛围图一律不算。
+     * 播放页接近满宽的横幅封面、PurePlay 方形封面要算。
      */
+    /** 封面屏蔽总闸：未武装或未打开时，热路径直接跳过。 */
+    private static boolean coverBlockOn() {
+        return sArmed && RemoteConfig.get().coverBlock;
+    }
+
+    /**
+     * 尺寸上才可能是封面图。
+     * 注意：播放页横幅（≈满宽 × 三成高）、PurePlay 大方图（≈七成屏宽）都要放行；
+     * 「宽 ≥70% 不当槽」只用于挖实心底（见 opaqueCoverPlate），绝不能挡封面图本身。
+     */
+    private static boolean maybeCoverSlot(View v) {
+        if (v == null) return false;
+        int w = v.getWidth();
+        int h = v.getHeight();
+        return w >= 140 && h >= 96;
+    }
+
+    /** 挖实心底时用：宽条（回顾文案 / 大按钮）绝不挖空。 */
+    private static boolean tooWideToDig(int w) {
+        return sSW > 0 && w * 100 >= (long) sSW * 70;
+    }
+
     private static boolean coverBlocked(View v) {
         try {
-            if (!sArmed) return false;
-            if (!RemoteConfig.get().coverBlock) return false;
-            if (!(v instanceof android.widget.ImageView)) return false;
+            if (!coverBlockOn()) return false;
+            // 先认图再扫树：非 Image/Skia 直接跳过，底栏/选项卡切换少很多 inReviewUi。
+            if (!looksLikeCoverArt(v)) return false;
+            if (!maybeCoverSlot(v)) return false;
             int w = v.getWidth();
             int h = v.getHeight();
-            if (w < 180 || h < 120) return false;
-            if (w * 100 >= (long) sSW * 96 && h * 100 >= (long) sSH * 96) return false;
-            if ((long) w * h * 100L > (long) sSW * sSH * 55L) return false;
+            if (!coverShaped(w, h)) return false;
+            if (underSplash(v)) return false;
+            if (inReviewUi(v)) return false;
             if (imgKind(v) == IMG_BLUR) return false;
-            if (inFloatingLayer(v)) return false;
             return true;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /** 小图标以下、整屏底图以上。通栏氛围层和小方图标另有排除。 */
+    private static boolean coverSized(int w, int h) {
+        if (w < 140 || h < 96) return false;
+        if (sSW <= 0 || sSH <= 0) return false;
+        if (w * 100 >= (long) sSW * 96 && h * 100 >= (long) sSH * 96) return false;
+        if ((long) w * h * 100L > (long) sSW * sSH * 70L) return false;
+        return true;
+    }
+
+    /**
+     * 作品封面的形状。
+     * <ul>
+     *   <li>通栏且偏高（PurePlay 顶部 localbg）→ 氛围层，排除；</li>
+     *   <li>通栏但只有三成屏高（播放页 1272×954 封面）→ 算封面；</li>
+     *   <li>小方图（logo / CD / 头像）→ 排除；大的正方形 PurePlay 封面仍算。</li>
+     * </ul>
+     */
+    private static boolean coverShaped(int w, int h) {
+        if (!coverSized(w, h)) return false;
+        if (sSW > 0 && w * 100 >= (long) sSW * 96
+                && sSH > 0 && h * 100 >= (long) sSH * 40) {
+            return false;
+        }
+        return !iconSquare(w, h);
+    }
+
+    /** 边长差在 25% 以内、短边不到屏宽 24% 的正方形：图标，不是作品封面。 */
+    private static boolean iconSquare(int w, int h) {
+        int min = Math.min(w, h);
+        int max = Math.max(w, h);
+        if (min <= 0 || max * 100 > min * 125) return false;
+        int limit = sSW > 0 ? (int) (sSW * 0.24f) : 300;
+        return min < limit;
+    }
+
+    /**
+     * 只认「自己落在 Splash 子树里」。
+     * 以前顺带扫整棵 DecorView，开屏尚未关掉时立刻收听的封面全被放过，
+     * 要等切后台 / 切底栏才盖上 —— 就是用户说的启动瞬间露馅。
+     */
+    private static boolean underSplash(View v) {
+        View cur = v;
+        for (int i = 0; i < 14 && cur != null; i++) {
+            try {
+                if (cur.getClass().getSimpleName().indexOf("Splash") >= 0) return true;
+            } catch (Throwable ignored) {
+            }
+            Object par;
+            try {
+                par = cur.getParent();
+            } catch (Throwable t) {
+                break;
+            }
+            cur = par instanceof View ? (View) par : null;
+        }
+        return false;
+    }
+
+    /** 首页回顾卡片用的短文案（只在卡片级容器里匹配）。 */
+    private static final String[] REVIEW_CARD_CUES = {
+            "你听了", "你喜欢的类型",
+    };
+
+    /** 月度回顾整页文案。绝不能含首页回顾卡片里的「你听了 / 喜欢的类型」。 */
+    private static final String[] MONTHLY_REVIEW_CUES = {
+            "月度回顾", "分享月度", "正在分析播放",
+            "最常听的作品", "根据播放记录",
+    };
+
+    /**
+     * 只在「回顾卡片」或「月度回顾页 / Dialog」里放过。
+     * 上一版对每个祖先都扫子树，首页 ScrollView 里有「回顾」标题后，
+     * 立刻收听的封面也被当成回顾 ⇒ 一切页回来就再也不遮了。
+     */
+    /** 同帧内回顾判定缓存，底栏切换时避免每层 View 都扫子树。 */
+    private static long sReviewCacheFrame;
+    private static final android.util.SparseBooleanArray REVIEW_HIT =
+            new android.util.SparseBooleanArray(48);
+    private static final android.util.SparseBooleanArray REVIEW_MISS =
+            new android.util.SparseBooleanArray(48);
+
+    private static boolean inReviewUi(View v) {
+        if (v == null) return false;
+        long frame = android.os.SystemClock.uptimeMillis() / 32L;
+        int id = System.identityHashCode(v);
+        if (frame != sReviewCacheFrame) {
+            sReviewCacheFrame = frame;
+            REVIEW_HIT.clear();
+            REVIEW_MISS.clear();
+        } else {
+            if (REVIEW_HIT.get(id, false)) return true;
+            if (REVIEW_MISS.get(id, false)) return false;
+        }
+        boolean hit = inReviewUiUncached(v);
+        if (hit) REVIEW_HIT.put(id, true);
+        else REVIEW_MISS.put(id, true);
+        return hit;
+    }
+
+    private static boolean inReviewUiUncached(View v) {
+        // 媒体库单列也常 dlg=1（ViewPager2），绝不能「凡 Dialog 都回顾」。
+        // 根扫描只用「月度回顾」专有文案（已剔除首页「你听了 / 喜欢的类型」），
+        // 首页根不会命中；月度页无论 Dialog 还是全屏 Activity 都能命中。
+        if (rootHasReviewCue(v)) return true;
+        boolean dlg = inDialogWindow(v);
+        if (dlg && !playContext(v) && !isPlayWindow(v)
+                && !underViewPager(v) && isReviewCdShape(v)) {
+            // 月度回顾大滚动 CD：独立 Dialog、无 ViewPager。
+            // PurePlay 播放页同是 Dialog 方图，但有 playContext / seek。
+            return true;
+        }
+        View cur = v;
+        for (int i = 0; i < 10 && cur != null; i++) {
+            if (cueHit(cur, REVIEW_CARD_CUES) || cueHit(cur, MONTHLY_REVIEW_CUES)) {
+                return true;
+            }
+            if (isFullPageContainer(cur)) {
+                // 满屏容器绝不能 cueInChildren(REVIEW_CARD)：首页 ScrollView 里有「你听了」
+                // 会把立刻收听整列封面都当成回顾。
+                if (cueInChildren(cur, MONTHLY_REVIEW_CUES, 0)) return true;
+            } else if (isLikelyReviewCard(cur)) {
+                if (cueInChildren(cur, REVIEW_CARD_CUES, 0)
+                        || cueInChildren(cur, MONTHLY_REVIEW_CUES, 0)) {
+                    return true;
+                }
+            }
+            Object par;
+            try {
+                par = cur.getParent();
+            } catch (Throwable t) {
+                break;
+            }
+            cur = par instanceof View ? (View) par : null;
+        }
+        return false;
+    }
+
+    private static boolean underViewPager(View v) {
+        View cur = v;
+        for (int i = 0; i < 12 && cur != null; i++) {
+            try {
+                String n = cur.getClass().getName();
+                if (n != null && n.contains("ViewPager")) return true;
+            } catch (Throwable ignored) {
+            }
+            Object par;
+            try {
+                par = cur.getParent();
+            } catch (Throwable t) {
+                break;
+            }
+            cur = par instanceof View ? (View) par : null;
+        }
+        return false;
+    }
+
+    /** 月度回顾里的方形 CD / 底部横向大滚动 CD 条。 */
+    private static boolean isReviewCdShape(View v) {
+        if (v == null) return false;
+        int w = v.getWidth();
+        int h = v.getHeight();
+        if (w < 160 || h < 160) return false;
+        int min = Math.min(w, h);
+        int max = Math.max(w, h);
+        int limit = sSW > 0 ? (int) (sSW * 0.28f) : 350;
+        // 近方形大 CD
+        if (max * 100 <= min * 130 && min >= limit) return true;
+        // 底部横向滚动 CD 位图：很宽、有一定高度，但不是整屏氛围层
+        if (sSW > 0 && w * 100 >= (long) sSW * 70
+                && h >= (int) (limit * 0.65f)
+                && (sSH <= 0 || h * 100 < (long) sSH * 55)) {
+            return true;
+        }
+        return false;
+    }
+
+    /** 回顾小卡片：非整屏宽、也不占大半屏高，才允许对子树扫「你听了」。 */
+    private static boolean isLikelyReviewCard(View cur) {
+        if (cur == null) return false;
+        int w = cur.getWidth();
+        int h = cur.getHeight();
+        if (w <= 0 || h <= 0) return false;
+        if (sSW > 0 && w * 100 >= (long) sSW * 92) return false;
+        if (sSH > 0 && h * 100 >= (long) sSH * 50) return false;
+        return true;
+    }
+
+    /** 同帧按窗口根缓存：月度回顾里大 CD 离文案很远，祖先短扫会漏。 */
+    private static long sRootCueFrame;
+    private static int sRootCueId;
+    private static boolean sRootCueHit;
+
+    private static boolean rootHasReviewCue(View v) {
+        View root;
+        try {
+            root = v.getRootView();
+        } catch (Throwable t) {
+            return false;
+        }
+        if (root == null) return false;
+        long frame = android.os.SystemClock.uptimeMillis() / 48L;
+        int id = System.identityHashCode(root);
+        if (frame == sRootCueFrame && id == sRootCueId) return sRootCueHit;
+        sRootCueFrame = frame;
+        sRootCueId = id;
+        // 只认月度回顾文案：首页根上也有「你听了」卡片，不能整窗放行。
+        sRootCueHit = bfsMonthlyCue(root, 0, 0);
+        return sRootCueHit;
+    }
+
+    private static boolean bfsMonthlyCue(View v, int depth, int visited) {
+        if (v == null || depth > 6 || visited > 48) return false;
+        if (cueHit(v, MONTHLY_REVIEW_CUES)) return true;
+        if (!(v instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) v;
+        int n = g.getChildCount();
+        if (n > 10) n = 10;
+        int next = visited + 1;
+        for (int i = 0; i < n; i++) {
+            if (bfsMonthlyCue(g.getChildAt(i), depth + 1, next + i)) return true;
+        }
+        return false;
+    }
+
+    /** 接近整页的容器：扫它的子树会把别的栏目文案误判进来。 */
+    private static boolean isPageSized(View v) {
+        return isFullPageContainer(v);
+    }
+
+    /** 只认几何上的满屏，不再把任意 Scroll/Recycler 名字当成整页。 */
+    private static boolean isFullPageContainer(View v) {
+        try {
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w <= 0 || h <= 0 || sSW <= 0 || sSH <= 0) return false;
+            return w * 100 >= (long) sSW * 90 && h * 100 >= (long) sSH * 45;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean cueHit(View v, String[] cues) {
+        try {
+            if (v instanceof android.widget.TextView) {
+                if (cueHit(((android.widget.TextView) v).getText(), cues)) return true;
+            }
+            return cueHit(v.getContentDescription(), cues);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean cueHit(CharSequence cs, String[] cues) {
+        if (cs == null || cues == null) return false;
+        String s = cs.toString();
+        if (s.length() == 0 || s.length() > 80) return false;
+        for (int i = 0; i < cues.length; i++) {
+            if (s.contains(cues[i])) return true;
+        }
+        return false;
+    }
+
+    private static boolean cueInChildren(View v, String[] cues, int depth) {
+        if (v == null || cues == null || depth > 3) return false;
+        if (cueHit(v, cues)) return true;
+        if (!(v instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) v;
+        int n = g.getChildCount();
+        if (n > 8) n = 8;
+        for (int i = 0; i < n; i++) {
+            if (cueInChildren(g.getChildAt(i), cues, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    /** ImageView / Expo / Fresco / Skia 纹理都可能是封面。 */
+    private static boolean looksLikeCoverArt(View v) {
+        if (v instanceof ImageView) return true;
+        if (v instanceof android.view.TextureView) return true;
+        try {
+            String n = v.getClass().getName();
+            return n.contains("Image") || n.contains("Drawee") || n.contains("Skia");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 这一层自己的纯色底；没有纯色底返回 0。 */
+    private static int plateColor(View v) {
+        try {
+            Drawable d = v.getBackground();
+            if (d == null) return 0;
+            if (d instanceof android.graphics.drawable.ColorDrawable) {
+                return ((android.graphics.drawable.ColorDrawable) d).getColor();
+            }
+            Integer c = solidColorOf(d);
+            return c == null ? 0 : c;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 这一层自己的纯色底透明度；没有纯色底返回 -1。 */
+    private static int plateAlpha(View v) {
+        int c = plateColor(v);
+        if (c == 0) return -1;
+        return (c >>> 24) & 0xFF;
+    }
+
+    /**
+     * 只铺一层淡主题色。不画壁纸（会钉在屏幕上，滑动时卡住），也不自己裁圆角。
+     * 底下若已是半透明主题框（媒体库双列那种），就什么都不加。
+     * {@code force}：实心底刚被跳过、必须自己罩一层时用，忽略父级半透明早退。
+     */
+    private static void paintCoverMask(Canvas c, View v) {
+        paintCoverMask(c, v, false);
+    }
+
+    private static void paintCoverMask(Canvas c, View v, boolean force) {
+        if (c == null || v == null) return;
+        int w = v.getWidth();
+        int h = v.getHeight();
+        if (w <= 0 || h <= 0) return;
+        if (!force) {
+            int plateA = tightPlateAlpha(v);
+            if (plateA >= 0 && plateA < 210) return;
+        }
+        try {
+            WASH_PAINT.setXfermode(null);
+            WASH_PAINT.setShader(null);
+            WASH_PAINT.setStyle(Paint.Style.FILL);
+            WASH_PAINT.setAntiAlias(true);
+            WASH_PAINT.setColor(coverVeilColor(v));
+            c.drawRect(0, 0, w, h, WASH_PAINT);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 紧贴封面的那层底色透明度；没有可读纯色底返回 -1。 */
+    private static int tightPlateAlpha(View image) {
+        View p;
+        try {
+            Object par = image.getParent();
+            p = par instanceof View ? (View) par : null;
+        } catch (Throwable t) {
+            return -1;
+        }
+        int iw = image.getWidth();
+        int ih = image.getHeight();
+        for (int i = 0; i < 3 && p != null; i++) {
+            int pw = p.getWidth();
+            int ph = p.getHeight();
+            boolean tight = pw > 0 && ph > 0
+                    && pw <= iw + Math.max(24, iw / 5)
+                    && ph <= ih + Math.max(24, ih / 5);
+            if (!tight) break;
+            int a = plateAlpha(p);
+            if (a >= 0) return a;
+            Object par;
+            try {
+                par = p.getParent();
+            } catch (Throwable t) {
+                break;
+            }
+            p = par instanceof View ? (View) par : null;
+        }
+        return -1;
+    }
+
+    /** 遮罩用的主题色：优先拿旁边那层淡色底的 RGB，透明度固定在类型框那一档。 */
+    private static int coverVeilColor(View v) {
+        int rgb = themeRgbNear(v);
+        if (rgb == 0) rgb = sCoverThemeRgb;
+        if (rgb == 0) rgb = AccentColor.washTint(255) & 0x00FFFFFF;
+        return (COVER_VEIL_ALPHA << 24) | (rgb & 0x00FFFFFF);
+    }
+
+    private static int themeRgbNear(View v) {
+        View p = v;
+        for (int i = 0; i < 4 && p != null; i++) {
+            int c = plateColor(p);
+            int a = (c >>> 24) & 0xFF;
+            int rgb = c & 0x00FFFFFF;
+            if (a >= 8 && a <= 210 && chromatic(rgb)) {
+                sCoverThemeRgb = rgb;
+                return rgb;
+            }
+            Object par;
+            try {
+                par = p.getParent();
+            } catch (Throwable t) {
+                break;
+            }
+            p = par instanceof View ? (View) par : null;
+        }
+        return 0;
+    }
+
+    private static boolean chromatic(int rgb) {
+        int r = (rgb >> 16) & 0xFF;
+        int g = (rgb >> 8) & 0xFF;
+        int b = rgb & 0xFF;
+        int max = Math.max(r, Math.max(g, b));
+        int min = Math.min(r, Math.min(g, b));
+        return max - min > 18 && max > 40;
+    }
+
+    /**
+     * 封面槽上那层不透明纯色不要画（列表白底、PurePlay 实心主题色块）。
+     * 半透明主题框保留。回顾放过。
+     * 注意：不能单凭「实心彩底 + 封面尺寸」就挖空 —— 首页回顾大卡片会被挖成全透方块。
+     * 无子图时只对「近方形 / 列表缩略图」动手。
+     */
+    private static boolean opaqueCoverPlate(View v) {
+        return opaqueCoverPlate(v, null);
+    }
+
+    /**
+     * {@code drawn}：正在 draw 的那层 drawable。View.getBackground() 有时是复合层，
+     * plateColor 读不到，但钩子里的 ColorDrawable / BackgroundDrawable 颜色是准的。
+     */
+    private static boolean opaqueCoverPlate(View v, Drawable drawn) {
+        try {
+            if (!sArmed) return false;
+            if (splashWhitePlate(v)) return true;
+            if (!coverBlockOn()) return false;
+            if (!maybeCoverSlot(v)) return false;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            // 宽条（回顾文案底、同步按钮）绝不挖空。
+            if (tooWideToDig(w)) return false;
+            // 扁胶囊按钮（没看过 / 导入）：宽远大于高，不是封面槽。
+            if (h > 0 && w * 100 > h * 155) return false;
+            if (isTextButtonPlate(v)) return false;
+            if (inReviewUi(v)) return false;
+            if (!coverShaped(w, h)) return false;
+            int c = colorFrom(v, drawn);
+            int a = (c == 0 && drawn == null) ? plateAlpha(v)
+                    : (c == 0 ? -1 : ((c >>> 24) & 0xFF));
+            // 半透明主题框（双列那种）保留。
+            if (a >= 0 && a < 210) return false;
+            // 包着封面图的实心底（列表白底 / PurePlay 槽）→ 挖掉。
+            if (wrapsCoverArt(v)) return true;
+            if (!isSolidCoverFillColor(c)) return false;
+            // 纯白：只挖「列表缩略图」几何；扁胶囊按钮已在上面排除。
+            if (isNearWhiteFill(c)) {
+                return isListThumbSlot(w, h) || isPortraitThumbSlot(w, h);
+            }
+            // 无子图的实心主题色：只清 PurePlay 近方槽。
+            return isNearSquareSlot(w, h);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean isNearWhiteFill(int c) {
+        int a = (c >>> 24) & 0xFF;
+        if (a < 210) return false;
+        int r = (c >> 16) & 0xFF;
+        int g = (c >> 8) & 0xFF;
+        int b = c & 0xFF;
+        return r > 220 && g > 220 && b > 220;
+    }
+
+    /** 「没看过 / 同步已购买」一类文字按钮底板，绝不能当封面槽挖空。 */
+    private static final String[] BUTTON_CUES = {
+            "没看过", "同步已购买", "导入", "创建播放列表", "看过",
+    };
+
+    private static boolean isTextButtonPlate(View v) {
+        if (v == null) return false;
+        View cur = v;
+        for (int i = 0; i < 5 && cur != null; i++) {
+            try {
+                String n = cur.getClass().getName();
+                if (n != null && n.contains("Button")) return true;
+            } catch (Throwable ignored) {
+            }
+            Object par;
+            try {
+                par = cur.getParent();
+            } catch (Throwable t) {
+                break;
+            }
+            cur = par instanceof View ? (View) par : null;
+        }
+        if (cueInChildren(v, BUTTON_CUES, 0)) return true;
+        return false;
+    }
+
+    private static int colorFrom(View v, Drawable drawn) {
+        if (drawn instanceof android.graphics.drawable.ColorDrawable) {
+            return ((android.graphics.drawable.ColorDrawable) drawn).getColor();
+        }
+        if (drawn != null) {
+            Integer c = solidColorOf(drawn);
+            if (c != null) return c;
+        }
+        return plateColor(v);
+    }
+
+    private static int plateAlphaFrom(View v, Drawable drawn) {
+        int c = colorFrom(v, drawn);
+        if (c == 0 && drawn == null) return plateAlpha(v);
+        if (c == 0) return -1;
+        return (c >>> 24) & 0xFF;
+    }
+
+    private static boolean isSolidCoverFillColor(int c) {
+        int a = (c >>> 24) & 0xFF;
+        if (a < 210) return false;
+        int r = (c >> 16) & 0xFF;
+        int g = (c >> 8) & 0xFF;
+        int b = c & 0xFF;
+        if (r > 220 && g > 220 && b > 220) return true;
+        return chromatic(c & 0x00FFFFFF);
+    }
+
+    /** 白底或实心主题色 —— 封面槽常见填充。 */
+    private static boolean isSolidCoverFill(View v) {
+        return isSolidCoverFillColor(plateColor(v));
+    }
+
+    /** PurePlay 导入封面：接近正方形，边长超过屏宽 24%。 */
+    private static boolean isNearSquareSlot(int w, int h) {
+        int min = Math.min(w, h);
+        int max = Math.max(w, h);
+        if (min <= 0 || max * 100 > min * 130) return false;
+        int limit = sSW > 0 ? (int) (sSW * 0.24f) : 300;
+        return min >= limit;
+    }
+
+    /** 媒体库单列缩略图：小于半屏的竖图 / 横图槽。 */
+    private static boolean isListThumbSlot(int w, int h) {
+        if (sSW <= 0 || sSH <= 0) return false;
+        if (!coverSized(w, h)) return false;
+        return w * 100 < (long) sSW * 48 && h * 100 < (long) sSH * 32;
+    }
+
+    /** PurePlay / 列表里略竖的封面槽（不一定严格正方形）。 */
+    private static boolean isPortraitThumbSlot(int w, int h) {
+        if (sSW <= 0 || sSH <= 0) return false;
+        if (!coverSized(w, h)) return false;
+        if (h < w) return false;
+        if (h * 100 > w * 165) return false;
+        return w * 100 < (long) sSW * 48 && h * 100 < (long) sSH * 42;
+    }
+
+    /** 开屏 logo 背后那层近白方底：不画，否则圆角外一圈白框会闪一下。 */
+    private static boolean splashWhitePlate(View v) {
+        if (!underSplash(v)) return false;
+        int w = v.getWidth();
+        int h = v.getHeight();
+        if (w < 80 || h < 80) return false;
+        int min = Math.min(w, h);
+        int max = Math.max(w, h);
+        if (max * 100 > min * 130) return false;
+        int c = plateColor(v);
+        int a = (c >>> 24) & 0xFF;
+        if (a < 200) return false;
+        int r = (c >> 16) & 0xFF;
+        int g = (c >> 8) & 0xFF;
+        int b = c & 0xFF;
+        return r > 220 && g > 220 && b > 220;
+    }
+
+    private static boolean wrapsCoverArt(View v) {
+        return findCoverDesc(v, v, 0);
+    }
+
+    /** 列表白槽常常是 ReactViewGroup → Wrapper → FrameLayout → ExpoImageView，要多钻几层。 */
+    private static boolean findCoverDesc(View plate, View node, int depth) {
+        if (plate == null || node == null || depth > 4) return false;
+        if (depth > 0 && childFillsCover(plate, node)) return true;
+        if (!(node instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) node;
+        int n = g.getChildCount();
+        if (n <= 0 || n > 8) return false;
+        for (int i = 0; i < n; i++) {
+            if (findCoverDesc(plate, g.getChildAt(i), depth + 1)) return true;
+        }
+        return false;
+    }
+
+    private static boolean childFillsCover(View plate, View c) {
+        if (c == null || !looksLikeCoverArt(c)) return false;
+        int cw = c.getWidth();
+        int ch = c.getHeight();
+        if (cw < 96 || ch < 96) return false;
+        int pw = plate.getWidth();
+        int ph = plate.getHeight();
+        if (pw <= 0 || ph <= 0) return false;
+        return cw * 100 >= pw * 70 && ch * 100 >= ph * 70;
+    }
+
+    /** Fresco / RN Image 自己重写了 {@code draw}，基类钩子进不去。 */
+    private static void hookDraweeCover(ClassLoader cl) {
+        String[] names = {
+                "com.facebook.drawee.view.DraweeView",
+                "com.facebook.react.views.image.ReactImageView",
+        };
+        for (int i = 0; i < names.length; i++) {
+            try {
+                Class<?> cls = XposedCompat.findClass(names[i], cl);
+                Method draw = cls.getDeclaredMethod("draw", Canvas.class);
+                draw.setAccessible(true);
+                XposedCompat.hookMethod(draw, chain -> {
+                    try {
+                        Object self = chain.getThisObject();
+                        Object a0 = chain.getArg(0);
+                        if (self instanceof View && a0 instanceof Canvas
+                                && coverBlocked((View) self)) {
+                            paintCoverMask((Canvas) a0, (View) self);
+                            traceCover((View) self, "coverBlock-drawee");
+                            return null;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    return chain.proceed();
+                });
+                log("hooked cover " + names[i] + "#draw");
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -9347,6 +10418,19 @@ public final class BgPeel {
         //   面板玻璃直接用 sWpBarBmp（壁纸 + 20% 单次模糊）—— 双次模糊把壁纸糊成
         //   色块，用户的原话是「概述页面的高斯模糊和之前的效果不一样了」。
         //   （v0.1.38 加这张图是为了让面板「看得出是毛玻璃」，但代价是整块失去背景轮廓。）
+        // ★★★ v0.1.111：F3 液态玻璃双档在配置变更时预烘焙（draw 里只取缓存）。
+        if (ready && cfg.f3Enabled) {
+            if (cfgDirty || sWpGlassRegular == null || sWpGlassClear == null) {
+                prebakeLiquidGlass(cfg, use);
+            }
+        } else if (sWpGlassRegular != null || sWpGlassClear != null) {
+            prebakeLiquidGlass(null, null);
+        }
+        // 关 F3 / 没壁纸 / 配置变了 ⇒ 清掉旧磨砂缓存，下次按需重建
+        if (!ready || cfgDirty) {
+            recycleGlass(sWpGlassBmp);
+            sWpGlassBmp = null;
+        }
         sDirty = false;
         // ★ v0.1.22 用户第 4 条：强调色跟在「壁纸 + 风格 + 开关」后面。
         //   内部有指纹短路（同一张图同一风格不会重复采样），这里每轮调是安全的。
@@ -9822,6 +10906,11 @@ public final class BgPeel {
         sWpBarBmp = null;
         sWpPlayBmp = null;
         sWpGlassBmp = null;
+        recycleGlass(sWpGlassRegular);
+        recycleGlass(sWpGlassClear);
+        sWpGlassRegular = null;
+        sWpGlassClear = null;
+        sGlassBakeFp = "";
         // ★ v0.1.73：换壁纸 / 关功能后，「对象级底图」的账也要作废，否则内层会继续
         //   drop 给一张已经不存在的根底板。
         sPlayRootBgView = null;

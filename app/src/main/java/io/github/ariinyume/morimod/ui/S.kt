@@ -31,6 +31,8 @@ internal object S {
 
     // ── 分区 / 列表项 ──────────────────────────────────────────────
     val SEC_FEATURES get() = s.SEC_FEATURES
+    val SEC_BEAUTY get() = s.SEC_BEAUTY
+    val SEC_OPTIMIZE get() = s.SEC_OPTIMIZE
     val SEC_MANAGE get() = s.SEC_MANAGE
 
     val ITEM_MEDIA get() = s.ITEM_MEDIA
@@ -83,6 +85,27 @@ internal object S {
     val BTN_CROP_USE get() = s.BTN_CROP_USE
     val TOAST_CROP_FAILED get() = s.TOAST_CROP_FAILED
     val F2_DELETE_BODY get() = s.F2_DELETE_BODY
+
+
+    // ── F3 ─────────────────────────────────────────────────────────
+    val F3_TITLE get() = s.F3_TITLE
+    val F3_ENABLE get() = s.F3_ENABLE
+    val F3_ENABLE_NOTE get() = s.F3_ENABLE_NOTE
+    val F3_MODE get() = s.F3_MODE
+    val F3_MODE_REGULAR get() = s.F3_MODE_REGULAR
+    val F3_MODE_CLEAR get() = s.F3_MODE_CLEAR
+    val F3_MODE_REGULAR_SUM get() = s.F3_MODE_REGULAR_SUM
+    val F3_MODE_CLEAR_SUM get() = s.F3_MODE_CLEAR_SUM
+    val F3_BLUR get() = s.F3_BLUR
+    val F3_TINT get() = s.F3_TINT
+    val F3_TINT_NOTE get() = s.F3_TINT_NOTE
+    val F3_SPECULAR get() = s.F3_SPECULAR
+    val F3_COVERAGE get() = s.F3_COVERAGE
+    val F3_COV_PANELS get() = s.F3_COV_PANELS
+    val F3_COV_FULL get() = s.F3_COV_FULL
+    val F3_COV_PANELS_SUM get() = s.F3_COV_PANELS_SUM
+    val F3_COV_FULL_SUM get() = s.F3_COV_FULL_SUM
+    val F3_FOOTNOTE get() = s.F3_FOOTNOTE
 
     // ── F4 ─────────────────────────────────────────────────────────
     val F4_TITLE get() = s.F4_TITLE

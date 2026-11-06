@@ -20,6 +20,7 @@ internal enum class Dest(val route: String) {
     MEDIA("media"),
     BACKGROUND("background"),
     FONT("font"),
+    GLASS("glass"),
     ABOUT("about");
 
     /** 当前语言下的标题（每次都重新取）。 */
@@ -28,6 +29,7 @@ internal enum class Dest(val route: String) {
         MEDIA -> S.F1_TITLE
         BACKGROUND -> S.F2_TITLE
         FONT -> S.F4_TITLE
+        GLASS -> S.F3_TITLE
         ABOUT -> S.ABOUT_TITLE
     }
 }
