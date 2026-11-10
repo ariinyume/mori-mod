@@ -8,9 +8,9 @@
 
 | | |
 |---|---|
-| 宿主 | `jp.co.eisys.dlsitesound`（实测 2.23.0） |
+| 宿主 | `jp.co.eisys.dlsitesound`（实测 2.23.1） |
 | 模块包名 | `io.github.ariinyume.morimod` |
-| 当前版本 | `0.1.99` / versionCode `10100` |
+| 当前版本 | `0.1.141` / versionCode `101` |
 | 测试设备 | 一加 15 ColorOS 17.0.0.105 |
 | 框架 | libxposed API 102（LSPosed / 现代 Xposed） |
 | 状态 | **持续开发中，暂不发布 Release** |
