@@ -15,7 +15,7 @@ package io.github.ariinyume.morimod.config;
 public final class Protocol {
 
     /** 契约版本。只在新增/废弃 action 时 +1。 */
-    public static final int PROTOCOL_VERSION = 4;
+    public static final int PROTOCOL_VERSION = 5;
 
     /** action 统一前缀，跟 applicationId 同源。 */
     public static final String ACTION_PREFIX = "io.github.ariinyume.morimod.action.";
@@ -27,8 +27,6 @@ public final class Protocol {
     public static final String ACTION_HOST_PING = ACTION_PREFIX + "SCOPE_HOST_PING";
     /** 探测应答。 */
     public static final String ACTION_HOST_PONG = ACTION_PREFIX + "SCOPE_HOST_PONG";
-    /** 重新随机本曲目（F1 会话级）。 */
-    public static final String ACTION_REROLL = ACTION_PREFIX + "REROLL_CURRENT";
     /** 查询诊断日志。 */
     public static final String ACTION_DIAG_REQ = ACTION_PREFIX + "DIAG_REQ";
     /** 诊断日志应答。 */
@@ -90,7 +88,6 @@ public final class Protocol {
     public static final String EXTRA_CONFIG_JSON = "config_json";
     public static final String EXTRA_TRIGGER_SUMMARY = "trigger_summary";
     public static final String EXTRA_DIAG_TEXT = "diag_text";
-    public static final String EXTRA_REROLL_OK = "reroll_ok";
     /** 素材相对名（{@code media/xxx.jpg} / {@code fonts/xxx.ttf}）。 */
     public static final String EXTRA_ASSET_REL = "asset_rel";
     /** 一次请求的序号（同一文件可能被多个请求交叉，回包靠它归位）。 */
@@ -117,7 +114,7 @@ public final class Protocol {
     public static String selfCheck() {
         String[] actions = {
                 ACTION_CONFIG_CHANGED, ACTION_HOST_PING, ACTION_HOST_PONG,
-                ACTION_REROLL, ACTION_DIAG_REQ, ACTION_DIAG_RESP, ACTION_DIAG_CLEAR,
+                ACTION_DIAG_REQ, ACTION_DIAG_RESP, ACTION_DIAG_CLEAR,
                 ACTION_CONFIG_REQ, ACTION_ASSET_REQ, ACTION_ASSET_CHUNK,
                 ACTION_HOST_ALIVE,
         };
@@ -132,7 +129,7 @@ public final class Protocol {
         }
         String[] extras = {
                 EXTRA_BUILD, EXTRA_TAG, EXTRA_HOST_ALIVE, EXTRA_CONFIG_JSON,
-                EXTRA_TRIGGER_SUMMARY, EXTRA_DIAG_TEXT, EXTRA_REROLL_OK,
+                EXTRA_TRIGGER_SUMMARY, EXTRA_DIAG_TEXT,
                 EXTRA_ASSET_REL, EXTRA_ASSET_RID, EXTRA_ASSET_SEQ, EXTRA_ASSET_N,
                 EXTRA_ASSET_DATA, EXTRA_ALIVE_TS,
         };

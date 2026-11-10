@@ -283,49 +283,6 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
-    /** 液态玻璃主题总开关（v0.1.111 起宿主侧真正消费）。 */
-    fun setF3Enabled(v: Boolean) {
-        config.f3Enabled = v
-        config.clamp()
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF3Mode(mode: String) {
-        config.f3Mode = mode
-        config.clamp()
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF3Blur(v: Int) {
-        config.f3Blur = v.coerceIn(0, 100)
-        touch()
-    }
-
-    fun commitF3Blur() {
-        config.clamp()
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF3Tint(v: Int) {
-        config.f3Tint = v.coerceIn(0, 100)
-        touch()
-    }
-
-    fun commitF3Tint() {
-        config.clamp()
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF3Specular(v: Boolean) {
-        config.f3Specular = v
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF3Coverage(v: String) {
-        config.f3Coverage = v
-        config.clamp()
-        if (persist()) toast = S.TOAST_SAVED
-    }
 
     /**
      * 调试日志开关。
@@ -390,29 +347,6 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         } catch (t: Throwable) {
             false
         }
-    }
-
-    // ── F1 播放控件 ──────────────────────────────────────────────────
-
-    fun setF1Enabled(v: Boolean) {
-        config.f1Enabled = v
-        config.clamp()
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF1Cover(v: Boolean) {
-        config.f1Cover = v
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF1Title(v: Boolean) {
-        config.f1Title = v
-        if (persist()) toast = S.TOAST_SAVED
-    }
-
-    fun setF1Artist(v: Boolean) {
-        config.f1Artist = v
-        if (persist()) toast = S.TOAST_SAVED
     }
 
     // ── F2 背景 ─────────────────────────────────────────────────────
@@ -701,100 +635,10 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         toast = S.TOAST_DELETED
     }
 
-    fun toggleMedia(id: String) {
-        val item = config.mediaPool.firstOrNull { it.id == id } ?: return
-        item.enabled = !item.enabled
-        persist()
-    }
-
-    /**
-     * 批量添加名称：按行拆分，逐行去空白，跳过空行；
-     * 返回真正加进去的条数（0 条时给提示，不静默失败）。
-     */
-    fun addNames(text: String, type: String): Int {
-        val lines = text.split('\n', '\r')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-        if (lines.isEmpty()) {
-            toast = S.TOAST_NO_SELECTION
-            return 0
-        }
-        var added = 0
-        lines.forEachIndexed { i, line ->
-            val item = MoriConfig.NameItem().apply {
-                id = "n" + System.currentTimeMillis().toString(36) + i + config.namePool.size
-                this.type = type
-                this.text = line
-                enabled = true
-            }
-            config.namePool.add(item)
-            added++
-        }
-        persist()
-        toast = "${S.TOAST_ADDED} $added"
-        return added
-    }
-
-    fun removeName(id: String) {
-        val removed = config.namePool.removeAll { it.id == id }
-        if (!removed) {
-            toast = S.TOAST_SAVE_FAILED
-            return
-        }
-        persist()
-        toast = S.TOAST_DELETED
-    }
-
-    fun toggleName(id: String) {
-        val item = config.namePool.firstOrNull { it.id == id } ?: return
-        item.enabled = !item.enabled
-        persist()
-    }
-
-    /** 「恢复默认」= 把该类型的素材全部重新启用，**不删除**任何条目。 */
-    fun restorePool(type: String, isMedia: Boolean) {
-        if (isMedia) {
-            config.mediaPool.filter { it.type == type }.forEach { it.enabled = true }
-        } else {
-            config.namePool.filter { it.type == type }.forEach { it.enabled = true }
-        }
-        persist()
-        toast = S.TOAST_POOL_RESTORED
-    }
-
-    /** 「清空列表」= 真删（UI 侧必须先弹确认）。 */
-    fun clearPool(type: String, isMedia: Boolean) {
-        if (isMedia) {
-            config.mediaPool.removeAll { it.type == type }
-            if (type == "background") bgClearedByUser = true
-            if (type == "background" && config.f2HomeBg.isNotEmpty()) {
-                // 背景池被清空时同步清掉当前选择，避免指向不存在的文件
-                val stillThere = config.mediaPool.any { it.path == config.f2HomeBg }
-                if (!stillThere) config.f2HomeBg = ""
-            }
-        } else {
-            config.namePool.removeAll { it.type == type }
-        }
-        persist()
-        toast = S.TOAST_POOL_CLEARED
-    }
-
-    /** 导出用文本（每行一条，只导该类型）。 */
-    fun exportText(type: String, isMedia: Boolean): String = if (isMedia) {
-        config.mediaPool.filter { it.type == type }
-            .joinToString("\n") { it.label.ifEmpty { it.path.substringAfterLast('/') } }
-    } else {
-        config.namePool.filter { it.type == type }.joinToString("\n") { it.text }
-    }
-
     // ── 按类型取素材 ────────────────────────────────────────────────
 
     fun mediaOf(type: String): List<MoriConfig.MediaItem> =
         config.mediaPool.filter { it.type == type }
-
-    fun namesOf(type: String): List<MoriConfig.NameItem> =
-        config.namePool.filter { it.type == type }
 
     // ── 作用域探测 ──────────────────────────────────────────────────
 

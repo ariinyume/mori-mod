@@ -73,7 +73,6 @@ def src_of(name):
 bg = src_of("BgPeel.java")
 f2 = src_of("FeatureF2.java")
 f4 = src_of("FeatureF4.java")
-f1 = src_of("FeatureF1.java")
 mod = src_of("MoriModModule.java")
 cfg = src_of("MoriConfig.java")
 acc = src_of("AccentColor.java")
@@ -470,8 +469,8 @@ A("素材同步：AssetSync / ModuleAssets / WallpaperBg 三件齐",
   all(k in bps for k in ("AssetSync", "ModuleAssets", "WallpaperBg")))
 A("桌面壁纸走 WallpaperBg 快照（不在宿主进程直接读壁纸服务）",
   "WallpaperBg" in bps and "android.app.WallpaperManager" in bps)
-A("媒体控制：MediaPool / SessionAssignment 齐备",
-  "MediaPool" in bps and "SessionAssignment" in bps)
+A("F1 运行时已移除（无 FeatureF1 / MediaPool / SessionAssignment）",
+  "FeatureF1" not in bps and "MediaPool" not in bps and "SessionAssignment" not in bps)
 A("状态回报：HostStatusReceiver + Heartbeat",
   "HostStatusReceiver" in bps and "Heartbeat" in bps)
 A("心跳间隔 20 秒（beat sent / interval=20000ms）", "interval=20000ms" in ALL_STR)
@@ -484,7 +483,7 @@ A("备份 / 恢复：BackupManager 存在", "BackupManager" in bps)
 A("诊断导出：DiagLog / UiDiag 齐备", "DiagLog" in bps and "UiDiag" in bps)
 A("日志门闸：LogGate（release 不开 verbose）", "LogGate" in bps)
 A("XposedCompat 封装（api 102 兼容层）", "XposedCompat" in bps)
-A("F1 存在但默认关闭（config 里 F1=false）", "FeatureF1" in bps)
+A("入口不再 install F1", 'installSafely("F1"' not in mod)
 A("协议常量集中在 config/Protocol", "Protocol" in bps)
 A("MoriConfig 是唯一耦合点（hook 与 ui 只共享它）",
   "io.github.ariinyume.morimod.config.MoriConfig" in bps)

@@ -23,9 +23,6 @@ public final class ConfigBus {
     private static final String TAG = "[MoriMod:ConfigBus]";
     private static volatile boolean sInstalled = false;
 
-    /** 宿主侧「重新随机本曲目」的处理器（由 F1 能力层注入，避免 config→hook 的硬耦合）。 */
-    public static volatile Runnable sRerollHandler;
-
     private ConfigBus() {
     }
 
@@ -114,16 +111,6 @@ public final class ConfigBus {
                             io.github.ariinyume.morimod.hook.Heartbeat.beat("ping");
                             break;
                         }
-                        case Protocol.ACTION_REROLL: {
-                            Runnable h = sRerollHandler;
-                            boolean ok = false;
-                            if (h != null) {
-                                h.run();
-                                ok = true;
-                            }
-                            DiagLog.event("f1", "reroll requested ok=" + ok);
-                            break;
-                        }
                         case Protocol.ACTION_DIAG_REQ: {
                             Intent resp = new Intent(Protocol.ACTION_DIAG_RESP);
                             resp.putExtra(Protocol.EXTRA_DIAG_TEXT, DiagLog.dump());
@@ -146,7 +133,6 @@ public final class ConfigBus {
         IntentFilter f = new IntentFilter();
         f.addAction(Protocol.ACTION_CONFIG_CHANGED);
         f.addAction(Protocol.ACTION_HOST_PING);
-        f.addAction(Protocol.ACTION_REROLL);
         f.addAction(Protocol.ACTION_DIAG_REQ);
         f.addAction(Protocol.ACTION_DIAG_CLEAR);
         try {
@@ -279,10 +265,6 @@ public final class ConfigBus {
 
     public static void sendHostScopePing(Context ctx) {
         sendToHost(ctx, new Intent(Protocol.ACTION_HOST_PING));
-    }
-
-    public static void sendReroll(Context ctx) {
-        sendToHost(ctx, new Intent(Protocol.ACTION_REROLL));
     }
 
     public static void sendDiagReq(Context ctx) {

@@ -4,7 +4,7 @@ package io.github.ariinyume.morimod.ui
  * 设置页文案的**统一入口**。
  *
  * 这里刻意只做转发（`get() = Strings.current.X`），不持有字面量：
- *  · 调用点写法保持 `S.F1_TITLE` 不变，三语言切换时自动拿到当前语言；
+ *  · 调用点写法保持 `S.F2_TITLE` 一类不变，三语言切换时自动拿到当前语言；
  *  · 字面量集中在 [Lang.kt] 的三张表里，一个文件看全所有语言；
  *  · [Strings.current] 是 `mutableStateOf`，切语言会触发重组。
  *
@@ -35,10 +35,7 @@ internal object S {
     val SEC_OPTIMIZE get() = s.SEC_OPTIMIZE
     val SEC_MANAGE get() = s.SEC_MANAGE
 
-    val ITEM_MEDIA get() = s.ITEM_MEDIA
-    val ITEM_MEDIA_SUM get() = s.ITEM_MEDIA_SUM
     val ITEM_BACKGROUND get() = s.ITEM_BACKGROUND
-    val ITEM_GLASS get() = s.ITEM_GLASS
     val ITEM_FONT get() = s.ITEM_FONT
     val ITEM_LAYOUT get() = s.ITEM_LAYOUT
     val ITEM_COVER_BLOCK get() = s.ITEM_COVER_BLOCK
@@ -51,19 +48,6 @@ internal object S {
     val ITEM_BACKUP get() = s.ITEM_BACKUP
     val ITEM_BACKUP_SUM get() = s.ITEM_BACKUP_SUM
     val ITEM_ABOUT get() = s.ITEM_ABOUT
-
-    // ── F1 ─────────────────────────────────────────────────────────
-    val F1_TITLE get() = s.F1_TITLE
-    val F1_ENABLE get() = s.F1_ENABLE
-    val F1_CARD_COVER get() = s.F1_CARD_COVER
-    val F1_CARD_COVER_SUM get() = s.F1_CARD_COVER_SUM
-    val F1_CARD_TRACK get() = s.F1_CARD_TRACK
-    val F1_CARD_ARTIST get() = s.F1_CARD_ARTIST
-    val F1_CARD_NAME_SUM get() = s.F1_CARD_NAME_SUM
-    val F1_EMPTY_COVER get() = s.F1_EMPTY_COVER
-    val F1_EMPTY_NAME get() = s.F1_EMPTY_NAME
-
-    fun enabledCount(on: Int, total: Int): String = s.F1_ENABLED_COUNT.format(on, total)
 
     // ── F2 ─────────────────────────────────────────────────────────
     val F2_TITLE get() = s.F2_TITLE
@@ -88,24 +72,6 @@ internal object S {
 
 
     // ── F3 ─────────────────────────────────────────────────────────
-    val F3_TITLE get() = s.F3_TITLE
-    val F3_ENABLE get() = s.F3_ENABLE
-    val F3_ENABLE_NOTE get() = s.F3_ENABLE_NOTE
-    val F3_MODE get() = s.F3_MODE
-    val F3_MODE_REGULAR get() = s.F3_MODE_REGULAR
-    val F3_MODE_CLEAR get() = s.F3_MODE_CLEAR
-    val F3_MODE_REGULAR_SUM get() = s.F3_MODE_REGULAR_SUM
-    val F3_MODE_CLEAR_SUM get() = s.F3_MODE_CLEAR_SUM
-    val F3_BLUR get() = s.F3_BLUR
-    val F3_TINT get() = s.F3_TINT
-    val F3_TINT_NOTE get() = s.F3_TINT_NOTE
-    val F3_SPECULAR get() = s.F3_SPECULAR
-    val F3_COVERAGE get() = s.F3_COVERAGE
-    val F3_COV_PANELS get() = s.F3_COV_PANELS
-    val F3_COV_FULL get() = s.F3_COV_FULL
-    val F3_COV_PANELS_SUM get() = s.F3_COV_PANELS_SUM
-    val F3_COV_FULL_SUM get() = s.F3_COV_FULL_SUM
-    val F3_FOOTNOTE get() = s.F3_FOOTNOTE
 
     // ── F4 ─────────────────────────────────────────────────────────
     val F4_TITLE get() = s.F4_TITLE
@@ -153,8 +119,6 @@ internal object S {
 
     // ── 按钮 ───────────────────────────────────────────────────────
     val COMMON_ENABLE get() = s.COMMON_ENABLE
-    val BTN_ADD_IMAGE get() = s.BTN_ADD_IMAGE
-    val BTN_ADD_NAME get() = s.BTN_ADD_NAME
     val BTN_RESTORE get() = s.BTN_RESTORE
     val BTN_CLEAR get() = s.BTN_CLEAR
     val BTN_EXPORT get() = s.BTN_EXPORT
@@ -188,8 +152,6 @@ internal object S {
     val TOAST_PICK_FAILED get() = s.TOAST_PICK_FAILED
     val TOAST_FONT_UNSUPPORTED get() = s.TOAST_FONT_UNSUPPORTED
     val TOAST_PICK_CANCELED get() = s.TOAST_PICK_CANCELED
-    val TOAST_POOL_RESTORED get() = s.TOAST_POOL_RESTORED
-    val TOAST_POOL_CLEARED get() = s.TOAST_POOL_CLEARED
     val TOAST_EXPORTED get() = s.TOAST_EXPORTED
     val TOAST_EXPORT_FAILED get() = s.TOAST_EXPORT_FAILED
     val TOAST_EXPORT_COPIED get() = s.TOAST_EXPORT_COPIED
@@ -201,16 +163,10 @@ internal object S {
     val TOAST_RESERVED get() = s.TOAST_RESERVED
     val TAG_WIP get() = s.TAG_WIP
     val TAG_EXPERIMENTAL get() = s.TAG_EXPERIMENTAL
-    val TOAST_GLASS_SAVED get() = s.TOAST_GLASS_SAVED
     val TOAST_DEFAULT_RESTORED get() = s.TOAST_DEFAULT_RESTORED
     val TOAST_BG_RESTORED get() = s.TOAST_BG_RESTORED
-    val TOAST_NO_SELECTION get() = s.TOAST_NO_SELECTION
     val TOAST_ICON_HIDDEN get() = s.TOAST_ICON_HIDDEN
     val TOAST_ICON_SHOWN get() = s.TOAST_ICON_SHOWN
     val TOAST_ICON_HIDE_FAILED get() = s.TOAST_ICON_HIDE_FAILED
-    val TOAST_ADDED get() = s.TOAST_ADDED
     val TOAST_DELETED get() = s.TOAST_DELETED
-
-    val EXPORT_FILE_TRACK get() = s.EXPORT_FILE_TRACK
-    val EXPORT_FILE_ARTIST get() = s.EXPORT_FILE_ARTIST
 }

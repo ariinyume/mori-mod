@@ -52,10 +52,7 @@ internal abstract class MoriStrings {
     abstract val SEC_OPTIMIZE: String
     abstract val SEC_MANAGE: String
 
-    abstract val ITEM_MEDIA: String
-    abstract val ITEM_MEDIA_SUM: String
     abstract val ITEM_BACKGROUND: String
-    abstract val ITEM_GLASS: String
     abstract val ITEM_FONT: String
     abstract val ITEM_LAYOUT: String
     abstract val ITEM_COVER_BLOCK: String
@@ -69,18 +66,6 @@ internal abstract class MoriStrings {
     abstract val ITEM_BACKUP: String
     abstract val ITEM_BACKUP_SUM: String
     abstract val ITEM_ABOUT: String
-
-    // ── F1 播放控件 ────────────────────────────────────────────────
-    abstract val F1_TITLE: String
-    abstract val F1_ENABLE: String
-    abstract val F1_CARD_COVER: String
-    abstract val F1_CARD_COVER_SUM: String
-    abstract val F1_CARD_TRACK: String
-    abstract val F1_CARD_ARTIST: String
-    abstract val F1_CARD_NAME_SUM: String
-    abstract val F1_EMPTY_COVER: String
-    abstract val F1_EMPTY_NAME: String
-    abstract val F1_ENABLED_COUNT: String
 
     // ── F2 背景 ────────────────────────────────────────────────────
     abstract val F2_TITLE: String
@@ -113,26 +98,6 @@ internal abstract class MoriStrings {
     /** 长按删除背景图的确认文案。 */
     abstract val F2_DELETE_BODY: String
 
-
-    // ── F3 液态玻璃 ────────────────────────────────────────────────
-    abstract val F3_TITLE: String
-    abstract val F3_ENABLE: String
-    abstract val F3_ENABLE_NOTE: String
-    abstract val F3_MODE: String
-    abstract val F3_MODE_REGULAR: String
-    abstract val F3_MODE_CLEAR: String
-    abstract val F3_MODE_REGULAR_SUM: String
-    abstract val F3_MODE_CLEAR_SUM: String
-    abstract val F3_BLUR: String
-    abstract val F3_TINT: String
-    abstract val F3_TINT_NOTE: String
-    abstract val F3_SPECULAR: String
-    abstract val F3_COVERAGE: String
-    abstract val F3_COV_PANELS: String
-    abstract val F3_COV_FULL: String
-    abstract val F3_COV_PANELS_SUM: String
-    abstract val F3_COV_FULL_SUM: String
-    abstract val F3_FOOTNOTE: String
 
     // ── F4 字体 ────────────────────────────────────────────────────
     abstract val F4_TITLE: String
@@ -194,8 +159,6 @@ internal abstract class MoriStrings {
     /** 卡片右上角开关的统一小标签。 */
     abstract val COMMON_ENABLE: String
 
-    abstract val BTN_ADD_IMAGE: String
-    abstract val BTN_ADD_NAME: String
     abstract val BTN_RESTORE: String
     abstract val BTN_CLEAR: String
     abstract val BTN_EXPORT: String
@@ -230,8 +193,6 @@ internal abstract class MoriStrings {
     abstract val TOAST_PICK_FAILED: String
     abstract val TOAST_FONT_UNSUPPORTED: String
     abstract val TOAST_PICK_CANCELED: String
-    abstract val TOAST_POOL_RESTORED: String
-    abstract val TOAST_POOL_CLEARED: String
     abstract val TOAST_EXPORTED: String
     abstract val TOAST_EXPORT_FAILED: String
     abstract val TOAST_EXPORT_COPIED: String
@@ -246,20 +207,15 @@ internal abstract class MoriStrings {
     abstract val TAG_WIP: String
     /** 「实验性」小标签：开了会改变宿主行为，且不保证在所有机型上都好看。 */
     abstract val TAG_EXPERIMENTAL: String
-    abstract val TOAST_GLASS_SAVED: String
     abstract val TOAST_DEFAULT_RESTORED: String
     /** 删掉了正在使用的背景图 ⇒ 已自动恢复宿主默认。 */
     abstract val TOAST_BG_RESTORED: String
-    abstract val TOAST_NO_SELECTION: String
     abstract val TOAST_ICON_HIDDEN: String
     abstract val TOAST_ICON_SHOWN: String
     abstract val TOAST_ICON_HIDE_FAILED: String
-    abstract val TOAST_ADDED: String
     abstract val TOAST_DELETED: String
 
     // ── 导出文件名 ─────────────────────────────────────────────────
-    abstract val EXPORT_FILE_TRACK: String
-    abstract val EXPORT_FILE_ARTIST: String
 }
 
 /** 简体中文（默认）。 */
@@ -282,10 +238,7 @@ internal object ZhCn : MoriStrings() {
     override val SEC_OPTIMIZE = "优化功能"
     override val SEC_MANAGE = "模块管理"
 
-    override val ITEM_MEDIA = "系统播放控件自定义"
-    override val ITEM_MEDIA_SUM = "仅针对通知栏 / 锁屏进行替换"
     override val ITEM_BACKGROUND = "背景自定义"
-    override val ITEM_GLASS = "液态玻璃主题"
     override val ITEM_FONT = "字体替换"
     override val ITEM_LAYOUT = "主页模块布局调整"
     override val ITEM_COVER_BLOCK = "作品封面屏蔽"
@@ -298,17 +251,6 @@ internal object ZhCn : MoriStrings() {
     override val ITEM_BACKUP = "导出与备份"
     override val ITEM_BACKUP_SUM = "导出配置文本，或从备份还原"
     override val ITEM_ABOUT = "关于"
-
-    override val F1_TITLE = "系统播放控件自定义"
-    override val F1_ENABLE = "启用替换"
-    override val F1_CARD_COVER = "替换封面图"
-    override val F1_CARD_COVER_SUM = "以矩阵形式摆出已经添加的图片，点选应用图片"
-    override val F1_CARD_TRACK = "替换音轨名"
-    override val F1_CARD_ARTIST = "替换社团名"
-    override val F1_CARD_NAME_SUM = "以列表形式出现已添加的名称，支持批量导入"
-    override val F1_EMPTY_COVER = "还没有图片，点「添加图片」选一张"
-    override val F1_EMPTY_NAME = "还没有名称，点「添加名称」批量导入"
-    override val F1_ENABLED_COUNT = "已启用 %1\$d / %2\$d"
 
     override val F2_TITLE = "主程序背景自定义"
     override val F2_ENABLE = "启用替换"
@@ -330,25 +272,6 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_CROP_FAILED = "裁剪失败，已保留原图"
     override val F2_DELETE_BODY = "会从图库里删掉这张图。如果它正被用作宿主背景，背景会一并恢复成宿主默认。"
 
-
-    override val F3_TITLE = "主程序液态玻璃主题"
-    override val F3_ENABLE = "启用液态玻璃"
-    override val F3_ENABLE_NOTE = "需要先启用「主程序背景自定义」并选择壁纸。关掉后恢复原来的磨砂面板效果。"
-    override val F3_MODE = "材质"
-    override val F3_MODE_REGULAR = "常规"
-    override val F3_MODE_CLEAR = "通透"
-    override val F3_MODE_REGULAR_SUM = "常规：更明显的压暗与模糊（对齐 iOS regular）"
-    override val F3_MODE_CLEAR_SUM = "通透：更轻的模糊、更少压暗（对齐 iOS clear）"
-    override val F3_BLUR = "模糊强度"
-    override val F3_TINT = "压暗强度"
-    override val F3_TINT_NOTE = "66 对齐 iOS 实测；壁纸是照片时可调到 80~100 更透。"
-    override val F3_SPECULAR = "镜面高光"
-    override val F3_COVERAGE = "覆盖范围"
-    override val F3_COV_PANELS = "仅弹层"
-    override val F3_COV_FULL = "含工具栏"
-    override val F3_COV_PANELS_SUM = "只处理底部弹层 / 信息面板（推荐）"
-    override val F3_COV_FULL_SUM = "含 chrome 的面清单仍在取证；本版仅记录偏好，绘制仍只覆盖弹层。"
-    override val F3_FOOTNOTE = "液态玻璃在 Android 上由模块自行渲染（宿主无原生实现）。导航栏与设置卡片不会被玻璃化。"
 
     override val F4_TITLE = "主程序字体替换"
     override val F4_CARD = "启用字体替换"
@@ -401,10 +324,7 @@ internal object ZhCn : MoriStrings() {
     override val BTN_OPEN_REPO = "打开"
     override val BTN_COPY_LINK = "复制链接"
 
-
     override val COMMON_ENABLE = "启用替换"
-    override val BTN_ADD_IMAGE = "添加图片"
-    override val BTN_ADD_NAME = "添加名称"
     override val BTN_RESTORE = "恢复默认"
     override val BTN_CLEAR = "清空列表"
     override val BTN_EXPORT = "导出列表"
@@ -436,8 +356,6 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_PICK_FAILED = "读取所选文件失败"
     override val TOAST_FONT_UNSUPPORTED = "非受支持的文件"
     override val TOAST_PICK_CANCELED = "已取消选择"
-    override val TOAST_POOL_RESTORED = "已恢复默认显示"
-    override val TOAST_POOL_CLEARED = "列表已清空"
     override val TOAST_EXPORTED = "已导出"
     override val TOAST_EXPORT_FAILED = "导出失败"
     override val TOAST_EXPORT_COPIED = "配置文本已复制到剪贴板"
@@ -449,18 +367,13 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_RESERVED = "待开发功能，请等待更新"
     override val TAG_WIP = "待开发"
     override val TAG_EXPERIMENTAL = "实验性"
-    override val TOAST_GLASS_SAVED = "液态玻璃设置已保存"
     override val TOAST_DEFAULT_RESTORED = "已恢复宿主默认"
     override val TOAST_BG_RESTORED = "已恢复为宿主默认背景"
-    override val TOAST_NO_SELECTION = "请先选择一个文件"
     override val TOAST_ICON_HIDDEN = "桌面图标已隐藏"
     override val TOAST_ICON_SHOWN = "桌面图标已恢复"
     override val TOAST_ICON_HIDE_FAILED = "修改桌面图标失败"
-    override val TOAST_ADDED = "已添加"
     override val TOAST_DELETED = "已删除"
 
-    override val EXPORT_FILE_TRACK = "morimod-track-names.txt"
-    override val EXPORT_FILE_ARTIST = "morimod-artist-names.txt"
 }
 
 /** 繁體中文。 */
@@ -483,10 +396,7 @@ internal object ZhTw : MoriStrings() {
     override val SEC_OPTIMIZE = "最佳化功能"
     override val SEC_MANAGE = "模組管理"
 
-    override val ITEM_MEDIA = "系統播放控制項自訂"
-    override val ITEM_MEDIA_SUM = "僅針對通知列 / 鎖定畫面進行替換"
     override val ITEM_BACKGROUND = "背景自訂"
-    override val ITEM_GLASS = "液態玻璃主題"
     override val ITEM_FONT = "字型替換"
     override val ITEM_LAYOUT = "首頁模組版面調整"
     override val ITEM_COVER_BLOCK = "作品封面屏蔽"
@@ -499,17 +409,6 @@ internal object ZhTw : MoriStrings() {
     override val ITEM_BACKUP = "匯出與備份"
     override val ITEM_BACKUP_SUM = "匯出設定文字，或從備份還原"
     override val ITEM_ABOUT = "關於"
-
-    override val F1_TITLE = "系統播放控制項自訂"
-    override val F1_ENABLE = "啟用替換"
-    override val F1_CARD_COVER = "替換封面圖"
-    override val F1_CARD_COVER_SUM = "以矩陣形式排出現有圖片，點選套用圖片"
-    override val F1_CARD_TRACK = "替換音軌名"
-    override val F1_CARD_ARTIST = "替換社團名"
-    override val F1_CARD_NAME_SUM = "以清單形式列出已新增的名稱，支援批次匯入"
-    override val F1_EMPTY_COVER = "尚無圖片，點「新增圖片」選一張"
-    override val F1_EMPTY_NAME = "尚無名稱，點「新增名稱」批次匯入"
-    override val F1_ENABLED_COUNT = "已啟用 %1\$d / %2\$d"
 
     override val F2_TITLE = "主程式背景自訂"
     override val F2_ENABLE = "啟用替換"
@@ -531,25 +430,6 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_CROP_FAILED = "裁剪失敗，已保留原圖"
     override val F2_DELETE_BODY = "會從圖庫裡刪掉這張圖。如果它正被用作宿主背景，背景會一併還原成宿主預設。"
 
-
-    override val F3_TITLE = "主程式液態玻璃主題"
-    override val F3_ENABLE = "啟用液態玻璃"
-    override val F3_ENABLE_NOTE = "需要先啟用「主程式背景自訂」並選擇壁紙。關掉後恢復原來的磨砂面板效果。"
-    override val F3_MODE = "材質"
-    override val F3_MODE_REGULAR = "常規"
-    override val F3_MODE_CLEAR = "通透"
-    override val F3_MODE_REGULAR_SUM = "常規：更明顯的壓暗與模糊（對齊 iOS regular）"
-    override val F3_MODE_CLEAR_SUM = "通透：更輕的模糊、更少壓暗（對齊 iOS clear）"
-    override val F3_BLUR = "模糊強度"
-    override val F3_TINT = "壓暗強度"
-    override val F3_TINT_NOTE = "66 對齊 iOS 實測；壁紙是照片時可調到 80~100 更透。"
-    override val F3_SPECULAR = "鏡面高光"
-    override val F3_COVERAGE = "覆蓋範圍"
-    override val F3_COV_PANELS = "僅彈層"
-    override val F3_COV_FULL = "含工具列"
-    override val F3_COV_PANELS_SUM = "只處理底部彈層 / 資訊面板（推薦）"
-    override val F3_COV_FULL_SUM = "含 chrome 的面清單仍在取證；本版僅記錄偏好，繪製仍只覆蓋彈層。"
-    override val F3_FOOTNOTE = "液態玻璃在 Android 上由模組自行渲染（宿主無原生實作）。導覽列與設定卡片不會被玻璃化。"
 
     override val F4_TITLE = "主程式字型替換"
     override val F4_CARD = "啟用字型替換"
@@ -602,10 +482,7 @@ internal object ZhTw : MoriStrings() {
     override val BTN_OPEN_REPO = "開啟"
     override val BTN_COPY_LINK = "複製連結"
 
-
     override val COMMON_ENABLE = "啟用替換"
-    override val BTN_ADD_IMAGE = "新增圖片"
-    override val BTN_ADD_NAME = "新增名稱"
     override val BTN_RESTORE = "還原預設"
     override val BTN_CLEAR = "清空清單"
     override val BTN_EXPORT = "匯出清單"
@@ -637,8 +514,6 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_PICK_FAILED = "讀取所選檔案失敗"
     override val TOAST_FONT_UNSUPPORTED = "非受支援的檔案"
     override val TOAST_PICK_CANCELED = "已取消選擇"
-    override val TOAST_POOL_RESTORED = "已還原預設顯示"
-    override val TOAST_POOL_CLEARED = "清單已清空"
     override val TOAST_EXPORTED = "已匯出"
     override val TOAST_EXPORT_FAILED = "匯出失敗"
     override val TOAST_EXPORT_COPIED = "設定文字已複製到剪貼簿"
@@ -650,18 +525,13 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_RESERVED = "待開發功能，請等待更新"
     override val TAG_WIP = "待開發"
     override val TAG_EXPERIMENTAL = "實驗性"
-    override val TOAST_GLASS_SAVED = "液態玻璃設定已儲存"
     override val TOAST_DEFAULT_RESTORED = "已還原宿主預設"
     override val TOAST_BG_RESTORED = "已還原為宿主預設背景"
-    override val TOAST_NO_SELECTION = "請先選擇一個檔案"
     override val TOAST_ICON_HIDDEN = "桌面圖示已隱藏"
     override val TOAST_ICON_SHOWN = "桌面圖示已還原"
     override val TOAST_ICON_HIDE_FAILED = "修改桌面圖示失敗"
-    override val TOAST_ADDED = "已新增"
     override val TOAST_DELETED = "已刪除"
 
-    override val EXPORT_FILE_TRACK = "morimod-track-names.txt"
-    override val EXPORT_FILE_ARTIST = "morimod-artist-names.txt"
 }
 
 /** English. */
@@ -684,10 +554,7 @@ internal object En : MoriStrings() {
     override val SEC_OPTIMIZE = "Tweaks"
     override val SEC_MANAGE = "Module"
 
-    override val ITEM_MEDIA = "Playback controls"
-    override val ITEM_MEDIA_SUM = "Replaces notification & lock screen only"
     override val ITEM_BACKGROUND = "Background"
-    override val ITEM_GLASS = "Liquid glass"
     override val ITEM_FONT = "Font"
     override val ITEM_LAYOUT = "Home layout"
     override val ITEM_COVER_BLOCK = "Hide work covers"
@@ -700,17 +567,6 @@ internal object En : MoriStrings() {
     override val ITEM_BACKUP = "Export & backup"
     override val ITEM_BACKUP_SUM = "Export config text, or restore from a backup"
     override val ITEM_ABOUT = "About"
-
-    override val F1_TITLE = "Playback controls"
-    override val F1_ENABLE = "Enable"
-    override val F1_CARD_COVER = "Replace artwork"
-    override val F1_CARD_COVER_SUM = "Tap an image in the grid to apply it"
-    override val F1_CARD_TRACK = "Replace track title"
-    override val F1_CARD_ARTIST = "Replace circle name"
-    override val F1_CARD_NAME_SUM = "Listed below; batch import supported"
-    override val F1_EMPTY_COVER = "No images yet — tap “Add image”"
-    override val F1_EMPTY_NAME = "No names yet — tap “Add name”"
-    override val F1_ENABLED_COUNT = "%1\$d / %2\$d enabled"
 
     override val F2_TITLE = "App background"
     override val F2_ENABLE = "Enable"
@@ -732,25 +588,6 @@ internal object En : MoriStrings() {
     override val TOAST_CROP_FAILED = "Crop failed — original image kept"
     override val F2_DELETE_BODY = "This removes the image from your library. If it is the current app background, the background is restored to the host default as well."
 
-
-    override val F3_TITLE = "Liquid glass theme"
-    override val F3_ENABLE = "Enable liquid glass"
-    override val F3_ENABLE_NOTE = "Requires a custom wallpaper. Turning off restores the previous frosted panels."
-    override val F3_MODE = "Material"
-    override val F3_MODE_REGULAR = "Regular"
-    override val F3_MODE_CLEAR = "Clear"
-    override val F3_MODE_REGULAR_SUM = "Regular: stronger tint and blur (matches iOS regular)"
-    override val F3_MODE_CLEAR_SUM = "Clear: lighter blur, less tint (matches iOS clear)"
-    override val F3_BLUR = "Blur strength"
-    override val F3_TINT = "Tint strength"
-    override val F3_TINT_NOTE = "66 matches iOS measurements; raise to 80–100 for photo wallpapers."
-    override val F3_SPECULAR = "Specular highlight"
-    override val F3_COVERAGE = "Coverage"
-    override val F3_COV_PANELS = "Panels only"
-    override val F3_COV_FULL = "Include chrome"
-    override val F3_COV_PANELS_SUM = "Only bottom sheets / info panels (recommended)"
-    override val F3_COV_FULL_SUM = "Chrome surfaces are still being surveyed; this build only stores the preference."
-    override val F3_FOOTNOTE = "On Android the module renders glass itself (host has no native path). Nav chrome and settings cards stay unglassed."
 
     override val F4_TITLE = "App font"
     override val F4_CARD = "Enable font replacement"
@@ -803,10 +640,7 @@ internal object En : MoriStrings() {
     override val BTN_OPEN_REPO = "Open"
     override val BTN_COPY_LINK = "Copy link"
 
-
     override val COMMON_ENABLE = "Enable"
-    override val BTN_ADD_IMAGE = "Add image"
-    override val BTN_ADD_NAME = "Add name"
     override val BTN_RESTORE = "Restore"
     override val BTN_CLEAR = "Clear list"
     override val BTN_EXPORT = "Export list"
@@ -838,8 +672,6 @@ internal object En : MoriStrings() {
     override val TOAST_PICK_FAILED = "Could not read the selected file"
     override val TOAST_FONT_UNSUPPORTED = "Unsupported file"
     override val TOAST_PICK_CANCELED = "Selection cancelled"
-    override val TOAST_POOL_RESTORED = "Default display restored"
-    override val TOAST_POOL_CLEARED = "List cleared"
     override val TOAST_EXPORTED = "Exported"
     override val TOAST_EXPORT_FAILED = "Export failed"
     override val TOAST_EXPORT_COPIED = "Config text copied to the clipboard"
@@ -851,18 +683,13 @@ internal object En : MoriStrings() {
     override val TOAST_RESERVED = "Not available yet — please wait for an update"
     override val TAG_WIP = "Coming soon"
     override val TAG_EXPERIMENTAL = "BETA"
-    override val TOAST_GLASS_SAVED = "Liquid glass settings saved"
     override val TOAST_DEFAULT_RESTORED = "Restored host default"
     override val TOAST_BG_RESTORED = "Restored host default background"
-    override val TOAST_NO_SELECTION = "Pick a file first"
     override val TOAST_ICON_HIDDEN = "Launcher icon hidden"
     override val TOAST_ICON_SHOWN = "Launcher icon restored"
     override val TOAST_ICON_HIDE_FAILED = "Could not change the launcher icon"
-    override val TOAST_ADDED = "Added"
     override val TOAST_DELETED = "Deleted"
 
-    override val EXPORT_FILE_TRACK = "morimod-track-names.txt"
-    override val EXPORT_FILE_ARTIST = "morimod-artist-names.txt"
 }
 
 /**

@@ -27,8 +27,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.ariinyume.morimod.ui.screens.AboutScreen
 import io.github.ariinyume.morimod.ui.screens.BackgroundScreen
 import io.github.ariinyume.morimod.ui.screens.FontScreen
-import io.github.ariinyume.morimod.ui.screens.GlassScreen
-import io.github.ariinyume.morimod.ui.screens.MediaControlScreen
 import io.github.ariinyume.morimod.ui.theme.MoriModTheme
 
 /**
@@ -65,10 +63,8 @@ class PageActivity : ComponentActivity() {
     companion object {
         const val EXTRA_PAGE = "page"
 
-        const val PAGE_MEDIA = "media"
         const val PAGE_BACKGROUND = "background"
         const val PAGE_FONT = "font"
-        const val PAGE_GLASS = "glass"
         const val PAGE_ABOUT = "about"
 
         /** 构造跳转意图；[page] 必须是上面四个常量之一。 */
@@ -78,10 +74,8 @@ class PageActivity : ComponentActivity() {
         /** [Dest] → 页面标识（显式 `when`，不用 `name`/序号，避免改动枚举时静默错位）。 */
         internal fun pageOf(dest: Dest): String = when (dest) {
             Dest.HOME -> PAGE_ABOUT      // 主页不走这里；兜底给一个安全页，绝不空白
-            Dest.MEDIA -> PAGE_MEDIA
             Dest.BACKGROUND -> PAGE_BACKGROUND
             Dest.FONT -> PAGE_FONT
-            Dest.GLASS -> PAGE_GLASS
             Dest.ABOUT -> PAGE_ABOUT
         }
     }
@@ -121,17 +115,12 @@ private fun PageHost(page: String, onBack: () -> Unit) {
             .background(MaterialTheme.colorScheme.background),
     ) {
         when (page) {
-            PageActivity.PAGE_MEDIA ->
-                MediaControlScreen(vm = vm, onBack = onBack, modifier = pageModifier)
-
             PageActivity.PAGE_BACKGROUND ->
                 BackgroundScreen(vm = vm, onBack = onBack, modifier = pageModifier)
 
             PageActivity.PAGE_FONT ->
                 FontScreen(vm = vm, onBack = onBack, modifier = pageModifier)
 
-            PageActivity.PAGE_GLASS ->
-                GlassScreen(vm = vm, onBack = onBack, modifier = pageModifier)
 
             else ->
                 AboutScreen(vm = vm, onBack = onBack, modifier = pageModifier)

@@ -69,6 +69,8 @@ fun ConnectedButtonGroup(
     enabled: Boolean = true,
     stretchLast: Boolean = false,
     stretchAll: Boolean = false,
+    /** ≥0 时：选中项保持强调色，未选项置灰（仍可点）。 */
+    selectedIndex: Int = -1,
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -79,6 +81,7 @@ fun ConnectedButtonGroup(
             val isLast = index == labels.lastIndex
             val shape = connectedButtonShape(index, labels.size)
             val icon = icons?.getOrNull(index)
+            val selected = selectedIndex < 0 || index == selectedIndex
             val content: @Composable () -> Unit = {
                 if (icon != null) {
                     Icon(
@@ -103,6 +106,8 @@ fun ConnectedButtonGroup(
             } else {
                 Modifier.height(size.height)
             }
+            val mutedContainer = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            val mutedContent = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
             when (tone) {
                 BtnTone.FILLED -> Button(
                     onClick = { onSelect(index) },
@@ -110,6 +115,16 @@ fun ConnectedButtonGroup(
                     shape = shape,
                     contentPadding = PaddingValues(horizontal = size.padH),
                     modifier = btnModifier,
+                    colors = if (selectedIndex >= 0 && !selected) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = mutedContainer,
+                            contentColor = mutedContent,
+                            disabledContainerColor = mutedContainer.copy(alpha = 0.35f),
+                            disabledContentColor = mutedContent.copy(alpha = 0.35f),
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
                     content = { content() },
                 )
                 BtnTone.TONAL -> FilledTonalButton(
@@ -119,8 +134,16 @@ fun ConnectedButtonGroup(
                     contentPadding = PaddingValues(horizontal = size.padH),
                     modifier = btnModifier,
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        containerColor = if (selectedIndex >= 0 && !selected) {
+                            mutedContainer
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        },
+                        contentColor = if (selectedIndex >= 0 && !selected) {
+                            mutedContent
+                        } else {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        },
                     ),
                     content = { content() },
                 )

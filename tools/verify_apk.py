@@ -201,7 +201,7 @@ def main():
     ok("入口类编进包", has_class("io.github.ariinyume.morimod.MoriModModule"))
     ok("Protocol 类编进包", has_class("io.github.ariinyume.morimod.config.Protocol"))
     ok("SettingsActivity 编进包", has_class("io.github.ariinyume.morimod.ui.SettingsActivity"))
-    ok("FeatureF1 编进包", has_class("io.github.ariinyume.morimod.hook.FeatureF1"))
+    ok("FeatureF1 已移除（不进包）", not has_class("io.github.ariinyume.morimod.hook.FeatureF1"))
     ok("FeatureF2 编进包", has_class("io.github.ariinyume.morimod.hook.FeatureF2"))
     ok("FeatureF4 编进包", has_class("io.github.ariinyume.morimod.hook.FeatureF4"))
     ok("ConfigBus 编进包", has_class("io.github.ariinyume.morimod.config.ConfigBus"))

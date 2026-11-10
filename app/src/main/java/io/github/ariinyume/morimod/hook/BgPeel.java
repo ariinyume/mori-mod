@@ -1016,6 +1016,7 @@ public final class BgPeel {
     /** ★ 热路径快速闸门：true = 有壁纸可画（{@link #sWpBmp} 非空）。 */
     private static volatile boolean sArmed;
 
+
     /** ★ 清晰壁纸位图（已含用户设置的遮罩 / 模糊）。 */
     private static volatile Bitmap sWpBmp;
 
@@ -1190,11 +1191,14 @@ public final class BgPeel {
         hookBackKey(cl);
         // ★★★ v0.1.85（r109 路径 2）：页面内容「挂载完成」这一事件上重绘一次
         hookScreenContentAdded(cl);
+        // ★★★ v0.1.135：月度回顾 Dialog 入窗 → 确认后换自定义底（绕开「底图只录一次」）
+        hookWindowAddView(cl);
         hookScreenSwitch(cl);
         hookPagerLight(cl);
         // ★★★ v0.1.77（r91）：空页看门狗（只观测，不改任何绘制）
         // startBlankWatch();
     }
+
 
     /**
      * ★★★ v0.1.74（r88 第 2 条「左/右划返回后页面空白」）：<b>页面切换事件 → 整窗补绘。</b>
@@ -1764,14 +1768,466 @@ public final class BgPeel {
         }
     }
 
-    /** 页面内容挂上来的那一刻：本应 40ms/260ms 两拍重绘（播放页不碰）。 */
+    /** 页面内容挂上来的那一刻：只补文字阴影（v0.1.127），不做整页重绘。 */
     private static void repaintPageAfterMount(final View page) {
-        // v0.1.118：底栏 / 媒体库选项卡切换时连发两拍 invalidate，
-        // 实测宿主整页重录 20~40ms。壁纸稳态不靠挂载重绘，整段停用。
-        if (page != null) {
-            /* kept for signature / future toggle */
+        // v0.1.118 起整页 mount 重绘停用（20~40ms）。
+        // v0.1.127：媒体库 / PurePlay / 设定等页首屏文字不进 arm 时那棵树，
+        //   只靠 draw 钩里的 Paint 阴影又会被 RN setTextColor 冲掉 ——
+        //   这里只排两拍 TextView 阴影刷新，不动列表容器。
+        scheduleShadowRefresh(page, "mount");
+    }
+
+    /** 切页 / 挂载后排两拍文字阴影刷新（节流，播放页不碰）。 */
+    private static volatile long sShadowSchedAt;
+
+    private static void scheduleShadowRefresh(final View root, final String why) {
+        if (!sArmed || root == null) return;
+        try {
+            if (isPlayWindow(root) || playContext(root)) return;
+        } catch (Throwable ignored) {
         }
-        return;
+        long now = System.currentTimeMillis();
+        if (now - sShadowSchedAt < 100L) return;
+        sShadowSchedAt = now;
+        final long[] delays = {36L, 200L};
+        for (final long delay : delays) {
+            MAIN.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (!sArmed || root.getWindowToken() == null) return;
+                        if (!root.isShown()) return;
+                        refreshTextShadows(root, why + "@" + delay);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, delay);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ v0.1.135：月度回顾 Dialog 蓝紫底 → 自定义壁纸
+    //   入口是 WindowManagerGlobal#addView（Dialog#show 在该 RN 版本不触发）。
+    //   底图只录一次 RenderNode，必须在确认后主动 invalidate 那一层再换画。
+    // ══════════════════════════════════════════════════════════════════
+
+    /** 已确认的月度回顾窗口 token（与 {@link #sReviewBgRef} 成对）。 */
+    private static volatile android.os.IBinder sReviewToken;
+    /** 月度回顾满屏底图（ReactImageView / ExpoImageView）。 */
+    private static volatile java.lang.ref.WeakReference<View> sReviewBgRef;
+    /** 最近一次入窗 / 兜底扫描时刻（节流）。 */
+    private static volatile long sReviewProbeAt;
+    /** 上次看到的窗口数量（兜底：窗口数增加才扫）。 */
+    private static volatile int sReviewWinCount = -1;
+    /** 入窗时还没 armed ⇒ 等壁纸就绪后再扫一遍。 */
+    private static volatile boolean sReviewRescan;
+    /** 诊断日志条数上限。 */
+    private static volatile int sReviewLogs;
+    private static volatile int sReviewHitLogs;
+    private static final int REVIEW_LOG_BUDGET = 24;
+
+    /**
+     * Hook {@code WindowManagerGlobal#addView}：Dialog 真正入窗的时刻。
+     * 不在这里立刻换图——文案 / CD 往往稍后才挂上，排 80/280ms 两拍确认。
+     */
+    private static void hookWindowAddView(ClassLoader cl) {
+        int n = 0;
+        try {
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal", false, cl);
+            Method[] ms = wmg.getDeclaredMethods();
+            for (int i = 0; i < ms.length; i++) {
+                Method m = ms[i];
+                if (!"addView".equals(m.getName())) continue;
+                Class<?>[] pt = m.getParameterTypes();
+                if (pt.length < 2 || !View.class.isAssignableFrom(pt[0])) continue;
+                m.setAccessible(true);
+                XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                    @Override
+                    protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                        try {
+                            Object a0 = chain.getArg(0);
+                            if (!(a0 instanceof View)) return;
+                            maybeArmReviewProbe((View) a0, "addView");
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+                n++;
+            }
+            log("hooked " + n + " WindowManagerGlobal#addView（月度回顾入窗）");
+            if (n == 0) {
+                log("review bg unsupported（addView 钩不到）");
+            }
+        } catch (Throwable t) {
+            log("review bg unsupported（WindowManagerGlobal）: " + t);
+        }
+    }
+
+    /**
+     * TextView 画出月度回顾文案时调用：底图多半已经录进 RenderNode，
+     * 立刻对所在窗做一次确认 + invalidate。
+     */
+    private static void noteReviewCueText(TextView tv) {
+        try {
+            if (!sArmed || tv == null) return;
+            if (!cueHit(tv, MONTHLY_REVIEW_CUES)) return;
+            if (!inDialogWindow(tv)) return;
+            View root = tv.getRootView();
+            if (root == null) return;
+            android.os.IBinder tok = root.getWindowToken();
+            View marked = sReviewBgRef == null ? null : sReviewBgRef.get();
+            if (tok != null && tok == sReviewToken && marked != null) return;
+            // 文案已在，直接探（不再干等 700ms）
+            probeReviewDialog(root, "cueText");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** addView 后：过滤候选 Dialog 根，排两拍确认。 */
+    private static void maybeArmReviewProbe(View root, String why) {
+        if (root == null) return;
+        try {
+            if (!isReviewDialogCandidate(root)) return;
+            if (isPlayWindow(root) || playContext(root)) return;
+            // 壁纸可能还没就绪（冷启动开回顾）—— 仍排确认；probe 里会记 rescan。
+            if (!sArmed) sReviewRescan = true;
+            scheduleReviewProbe(root, why);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * 非主窗口 +（Dialog 痕迹或近满屏）候选。
+     * <p>addView 当下 DecorView 往往还没挂上 {@code DialogRootViewGroup}，
+     * 不能只认类名；确认阶段再用 cues / 结构收紧。
+     */
+    private static boolean isReviewDialogCandidate(View root) {
+        if (root == null) return false;
+        try {
+            android.view.ViewGroup.LayoutParams lp = root.getLayoutParams();
+            if (lp instanceof android.view.WindowManager.LayoutParams) {
+                int t = ((android.view.WindowManager.LayoutParams) lp).type;
+                if (t == android.view.WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+                    return false;
+                }
+            }
+            if (hasDialogNameNear(root, 0)) return true;
+            int w = root.getWidth();
+            int h = root.getHeight();
+            // addView 当下可能还没 layout；宽度为 0 也先排确认。
+            if (w <= 0 || h <= 0) return true;
+            if (sSW > 0 && sSH > 0) {
+                return w * 100 >= (long) sSW * 55 && h * 100 >= (long) sSH * 55;
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 根及其近几层子节点类名是否含 Dialog。 */
+    private static boolean hasDialogNameNear(View v, int depth) {
+        if (v == null || depth > 3) return false;
+        try {
+            String cn = v.getClass().getName();
+            if (cn != null && cn.contains("Dialog")) return true;
+        } catch (Throwable ignored) {
+        }
+        if (!(v instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) v;
+        int n = Math.min(g.getChildCount(), 6);
+        for (int i = 0; i < n; i++) {
+            if (hasDialogNameNear(g.getChildAt(i), depth + 1)) return true;
+        }
+        return false;
+    }
+
+    private static void scheduleReviewProbe(final View root, final String why) {
+        if (root == null) return;
+        long now = System.currentTimeMillis();
+        // 同一次打开不要刷一串；不同 why 仍允许（兜底扫描）
+        if (now - sReviewProbeAt < 60L && "addView".equals(why)) return;
+        sReviewProbeAt = now;
+        // 底图常比文案先画完；280ms 仍可能没字。700/1400 专啃「先录 RenderNode」那次。
+        final long[] delays = {80L, 280L, 700L, 1400L};
+        for (final long delay : delays) {
+            MAIN.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    probeReviewDialog(root, why + "@" + delay);
+                }
+            }, delay);
+        }
+    }
+
+    /**
+     * 确认是月度回顾后：标记满屏底图并只 invalidate 那一层。
+     * 已标记同一 token 则跳过（第二拍短路）。
+     */
+    private static void probeReviewDialog(View root, String why) {
+        try {
+            if (root == null) return;
+            if (!sArmed) {
+                sReviewRescan = true;
+                return;
+            }
+            if (root.getWindowToken() == null || !root.isShown()) return;
+            if (isPlayWindow(root) || playContext(root)) return;
+            android.os.IBinder tok = root.getWindowToken();
+            View marked = sReviewBgRef == null ? null : sReviewBgRef.get();
+            if (tok != null && tok == sReviewToken && marked != null
+                    && marked.getWindowToken() == tok) {
+                return;
+            }
+            boolean ok = rootHasReviewCue(root)
+                    || a11yHasMonthlyCue(root, 0, 0)
+                    || structuralMonthlyReview(root);
+            if (!ok) {
+                reviewLog("review bg miss（未确认）" + why + " " + name(root)
+                        + " " + root.getWidth() + "x" + root.getHeight());
+                return;
+            }
+            View bg = findFullscreenReviewBackdrop(root, 0, 0);
+            if (bg == null) {
+                reviewLog("review bg miss（无满屏底）" + why + " " + name(root));
+                return;
+            }
+            sReviewToken = tok;
+            sReviewBgRef = new java.lang.ref.WeakReference<>(bg);
+            sReviewRescan = false;
+            reviewLog("review bg arm " + why + " -> " + name(bg)
+                    + " " + bg.getWidth() + "x" + bg.getHeight());
+            try {
+                bg.invalidate();
+                ViewParent p = bg.getParent();
+                if (p instanceof View) ((View) p).invalidate();
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable t) {
+            reviewLog("review bg probe err: " + t);
+        }
+    }
+
+    /** a11y 文案扫 MONTHLY_REVIEW_CUES（RN 字常挂在无障碍节点上）。 */
+    private static boolean a11yHasMonthlyCue(View v, int depth, int visited) {
+        if (v == null || depth > 16 || visited > 160) return false;
+        try {
+            CharSequence desc = v.getContentDescription();
+            if (cueHit(desc, MONTHLY_REVIEW_CUES)) return true;
+            android.view.accessibility.AccessibilityNodeInfo n = v.createAccessibilityNodeInfo();
+            if (n != null) {
+                try {
+                    if (cueHit(n.getText(), MONTHLY_REVIEW_CUES)) return true;
+                    if (cueHit(n.getContentDescription(), MONTHLY_REVIEW_CUES)) return true;
+                } finally {
+                    try {
+                        n.recycle();
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (!(v instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) v;
+        int n = g.getChildCount();
+        if (n > 12) n = 12;
+        int next = visited + 1;
+        for (int i = 0; i < n; i++) {
+            if (a11yHasMonthlyCue(g.getChildAt(i), depth + 1, next + i)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 结构兜底：Dialog 内一张贴顶满屏图 + 同窗有回顾 CD 形。
+     * 挡住普通半屏弹层 / PurePlay。
+     */
+    private static boolean structuralMonthlyReview(View root) {
+        if (root == null) return false;
+        // addView 拿到的常是 DecorView；Dialog* 在子树里，不能只向上找。
+        if (!inDialogWindow(root) && !isReviewDialogCandidate(root)) return false;
+        View bg = findFullscreenReviewBackdrop(root, 0, 0);
+        if (bg == null) return false;
+        return findReviewCdInTree(root, 0, 0);
+    }
+
+    private static boolean findReviewCdInTree(View v, int depth, int visited) {
+        if (v == null || depth > 8 || visited > 48) return false;
+        if (isReviewCdShape(v) && looksLikeCoverArt(v)) return true;
+        if (!(v instanceof ViewGroup)) return false;
+        ViewGroup g = (ViewGroup) v;
+        int n = g.getChildCount();
+        if (n > 10) n = 10;
+        int next = visited + 1;
+        for (int i = 0; i < n; i++) {
+            if (findReviewCdInTree(g.getChildAt(i), depth + 1, next + i)) return true;
+        }
+        return false;
+    }
+
+    /** 找 Dialog 内 @0,0 且 ≥92%×92% 窗口的图片层。 */
+    private static View findFullscreenReviewBackdrop(View v, int depth, int visited) {
+        if (v == null || depth > 10 || visited > 80) return null;
+        if (isFullscreenReviewBackdrop(v)) return v;
+        if (!(v instanceof ViewGroup)) return null;
+        ViewGroup g = (ViewGroup) v;
+        int n = g.getChildCount();
+        if (n > 12) n = 12;
+        int next = visited + 1;
+        for (int i = 0; i < n; i++) {
+            View hit = findFullscreenReviewBackdrop(g.getChildAt(i), depth + 1, next + i);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    private static boolean isFullscreenReviewBackdrop(View v) {
+        if (v == null) return false;
+        try {
+            if (!looksLikeCoverArt(v)) return false;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w <= 0 || h <= 0) return false;
+            View root = v.getRootView();
+            if (root == null) return false;
+            int rw = root.getWidth();
+            int rh = root.getHeight();
+            if (rw <= 0 || rh <= 0) return false;
+            if (w * 100 < (long) rw * 92 || h * 100 < (long) rh * 92) return false;
+            int[] loc = LOC.get();
+            v.getLocationOnScreen(loc);
+            int vx = loc[0];
+            int vy = loc[1];
+            root.getLocationOnScreen(loc);
+            int dx = vx - loc[0];
+            int dy = vy - loc[1];
+            // 贴窗顶角（允许状态栏级偏差）
+            return dx <= 8 && dy <= 24;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 绘制：已标记的满屏底（或同窗满屏贴顶图）铺 {@link #sWpBmp}。
+     * 必须在 paintBlurBg 的 CONTENT 放行之前调用。
+     */
+    private static boolean paintReviewBg(View v, Canvas c) {
+        if (!sArmed || v == null || c == null) return false;
+        Bitmap bmp = sWpBmp;
+        if (bmp == null || bmp.isRecycled()) return false;
+        if (!isFullscreenReviewBackdrop(v)) return false;
+        View marked = sReviewBgRef == null ? null : sReviewBgRef.get();
+        boolean hit = marked == v;
+        if (!hit) {
+            try {
+                android.os.IBinder tok = sReviewToken;
+                if (tok != null && v.getWindowToken() == tok) {
+                    hit = true;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        // 绘制路径补救：probe 错过时，凭回顾文案当场接管。
+        // ★★★ v0.1.140：draw 热路径不再用 structuralMonthlyReview 误标 ——
+        //   普通 Dialog 里一张满屏图 + 方图就会命中，导入/下载窗被换成清晰壁纸
+        //   且 return null 跳过宿主，玻璃面板只剩紫底。结构兜底只留给 probe。
+        if (!hit) {
+            try {
+                if (!inDialogWindow(v)) return false;
+                View root = v.getRootView();
+                if (root == null) return false;
+                if (!(rootHasReviewCue(root) || a11yHasMonthlyCue(root, 0, 0))) {
+                    return false;
+                }
+                sReviewToken = v.getWindowToken();
+                sReviewBgRef = new java.lang.ref.WeakReference<>(v);
+                hit = true;
+                reviewLog("review bg arm@draw -> " + name(v)
+                        + " " + v.getWidth() + "x" + v.getHeight());
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+        if (!hit) return false;
+        int w;
+        int h;
+        try {
+            w = v.getWidth();
+            h = v.getHeight();
+        } catch (Throwable t) {
+            return false;
+        }
+        if (w <= 0 || h <= 0) return false;
+        if (!paintAligned(c, bmp, v, new Rect(0, 0, w, h), false)) return false;
+        sPainted = true;
+        if (sReviewHitLogs < 4) {
+            sReviewHitLogs++;
+            log("review bg hit -> " + name(v) + " " + w + "x" + h);
+        }
+        return true;
+    }
+
+    /**
+     * apply 兜底：窗口数增加，或入窗时还没 armed 现在刚就绪，扫非主窗 Dialog。
+     *
+     * @param force true = 刚武装 / 需要补扫，忽略窗口数是否变化
+     */
+    private static void scanReviewWindowsIfGrew(boolean force) {
+        if (!sArmed) {
+            clearReviewBgMark();
+            return;
+        }
+        try {
+            View[] roots = windowRoots();
+            int n = roots.length;
+            boolean grew = sReviewWinCount >= 0 && n > sReviewWinCount;
+            sReviewWinCount = n;
+            if (!force && !grew && !sReviewRescan) return;
+            sReviewRescan = false;
+            for (int i = 0; i < n; i++) {
+                View r = roots[i];
+                if (r == null || !r.isShown()) continue;
+                if (!isReviewDialogCandidate(r)) continue;
+                if (isPlayWindow(r) || playContext(r)) continue;
+                scheduleReviewProbe(r, force ? "armScan" : "mViews");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static View[] windowRoots() {
+        try {
+            Class<?> wmg = Class.forName("android.view.WindowManagerGlobal");
+            Object inst = wmg.getMethod("getInstance").invoke(null);
+            java.lang.reflect.Field f = wmg.getDeclaredField("mViews");
+            f.setAccessible(true);
+            Object v = f.get(inst);
+            if (v instanceof java.util.List) {
+                java.util.List<?> list = (java.util.List<?>) v;
+                java.util.ArrayList<View> out = new java.util.ArrayList<>(list.size());
+                for (int i = 0; i < list.size(); i++) {
+                    Object o = list.get(i);
+                    if (o instanceof View) out.add((View) o);
+                }
+                return out.toArray(new View[0]);
+            }
+        } catch (Throwable ignored) {
+        }
+        return new View[0];
+    }
+
+    private static void clearReviewBgMark() {
+        sReviewToken = null;
+        sReviewBgRef = null;
+        sReviewHitLogs = 0;
+    }
+
+    private static void reviewLog(String msg) {
+        if (sReviewLogs >= REVIEW_LOG_BUDGET) return;
+        sReviewLogs++;
+        log(msg);
     }
 
     /** @deprecated 挂载重绘已停用；保留原实现备查。 */
@@ -1868,6 +2324,11 @@ public final class BgPeel {
                                 String st = arg instanceof Enum ? ((Enum<?>) arg).name() : String.valueOf(arg);
                                 View screen = self instanceof View ? (View) self : null;
                                 armPageRepaint(screen, st);
+                                // ★★★ v0.1.127：屏到前台时补阴影（arm 时树还没这页）。
+                                if (screen != null && st != null
+                                        && (st.contains("ON_TOP") || st.contains("ACTIVE"))) {
+                                    scheduleShadowRefresh(screen, "screen:" + st);
+                                }
                                 if (sActLeft > 0) {
                                     sActLeft--;
                                     android.util.Log.i("MoriSnap", "activityState " + st
@@ -2048,6 +2509,9 @@ public final class BgPeel {
                 // ★ v0.1.91：retintTree 现在**谁变了谁 invalidate**，
                 //   这里不再整树重绘（那一下就是 800 个 View、200ms）。
                 retintTree(root, 0);
+                // ★★★ v0.1.126：强调色一变，阴影色也变 —— 主动给树上文字补阴影，
+                //   不等人手滑动才触发 View#draw（用户报「字体阴影没有及时渲染」）。
+                refreshTextShadows(root, "accent");
             }
         } catch (Throwable ignored) {
         }
@@ -2073,6 +2537,9 @@ public final class BgPeel {
                     int m = AccentColor.remap(c);
                     if (m != c) {
                         tv.setTextColor(m);
+                        // setTextColor → updateTextColors 只认 mShadow*；清缓存让
+                        // 随后的 ensureShadow / refreshTextShadows 重新走 TextView API。
+                        SHADOWED.remove(tv);
                         n++;
                     }
                 } else {
@@ -2215,9 +2682,14 @@ public final class BgPeel {
             XposedCompat.hookMethod(draw, chain -> {
                 try {
                     Object self = chain.getThisObject();
-                    if (self instanceof Drawable) {
+                    Object arg0 = chain.getArg(0);
+                    if (self instanceof Drawable && arg0 instanceof Canvas) {
                         View plate = ownerView((Drawable) self);
                         if (plate != null && opaqueCoverPlate(plate, (Drawable) self)) {
+                            return null;
+                        }
+                        if (paintWallpaper((Drawable) self, (Canvas) arg0, true)) {
+                            rememberBgOwner((Drawable) self);
                             return null;
                         }
                     }
@@ -2252,18 +2724,6 @@ public final class BgPeel {
                         View plate = ownerView((Drawable) self);
                         if (plate != null && opaqueCoverPlate(plate, (Drawable) self)) {
                             return null;
-                        }
-                        // ★★★ v0.1.41（r12 路径 A）：**玻璃表面只换颜料，不接管绘制**。
-                        //   命中 ⇒ 把宿主那支 Paint 的 shader 换成模糊壁纸，
-                        //   然后照常 chain.proceed() —— 圆角、位置、裁剪全由宿主自己完成。
-                        //   不跳过绘制 ⇒ 结构上不可能再出现「面板整块消失」。
-                        GlassPaint.Token tk = glassToken((Drawable) self);
-                        if (tk != null) {
-                            try {
-                                return chain.proceed();
-                            } finally {
-                                GlassPaint.end(tk);
-                            }
                         }
                         long tWp = System.nanoTime();
                         boolean wp = paintWallpaper((Drawable) self, (Canvas) arg0, requireOpaque);
@@ -2377,9 +2837,15 @@ public final class BgPeel {
                     if (v != null) {
                         TrackSwitchRelief.pinFromDraw(v);
                     }
-                    // ★ r107：「月度回顾」弹窗底色那套改动已按用户要求全部移除
-                    //   （两次识别方案都没能在真机上生效：那层底图画一次就不再重画，
-                    //    而这棵 Dialog 树里既扫不到文字层、也没有稳定可用的 pager 信号）。
+                    // ★★★ v0.1.135：月度回顾满屏蓝紫底 → 自定义壁纸（事件驱动标记后画）。
+                    //   ReactImageView 另有 Drawee 钩子；这里兜住走基类 draw 的层。
+                    if (cv != null && paintReviewBg(v, cv)) {
+                        return null;
+                    }
+                    // 回顾文案一出现就补确认（须在 lightNav 短路之前）。
+                    if (v instanceof TextView) {
+                        noteReviewCueText((TextView) v);
+                    }
                     // ★★★ v0.1.44（r15 用户第 6 条）：防偷窥封面块记下来，
                     //   等**宿主画完**再叠强调色罩（见 privacyWash）。
                     // 作品封面屏蔽：不画原图，按需要铺一层半透明主题色。
@@ -2525,11 +2991,12 @@ public final class BgPeel {
                             //   ② 类名级（别的模块注入的 View，见 foreignModuleView）。
                             //   任何一道判不出来都按「是宿主的」处理（宁可多管，不少管）。
                             if (inAppWindow(v) && !foreignModuleView(v)) {
-                                ensureShadow((TextView) v);
-                                // ★★★ v0.1.43（r14 用户第 1 条）：绘制前再逼一次小字强调色。
-                                //   底栏 / 白按钮里的字常常是 ColorStateList 设一次就再也不走
-                                //   setTextColor —— 换壁纸 / 换风格后 Paint 里仍是宿主紫。
+                                // ★★★ v0.1.127：先强调色、后阴影。
+                                //   forceAccent 里的 setTextColor 会走 updateTextColors，
+                                //   只认 TextView 自己的 mShadow*；若阴影写在前面，
+                                //   颜色一改就把「只写在 Paint 上」的阴影冲掉。
                                 forceAccentSmallText((TextView) v);
+                                ensureShadow((TextView) v);
                             }
                         } else if (rescueCover(v)) {
                             noteCoverKept();
@@ -2696,6 +3163,12 @@ public final class BgPeel {
                             sPainted = true;
                             if (cv != null) paintCoverMask(cv, v);
                             traceCover(v, "coverBlock");
+                            return null;
+                        }
+                        // ★★★ v0.1.135：月度回顾底优先于 paintBlurBg（CONTENT 会放行宿主）。
+                        if (cv != null && paintReviewBg(v, cv)) {
+                            traceExpo(v, "review");
+                            wash = false;
                             return null;
                         }
                         if (cv != null && paintBlurBg(v, cv)) {
@@ -3181,6 +3654,8 @@ public final class BgPeel {
      */
     private static boolean paintBlurBg(View v, Canvas c) {
         if (!sArmed) return false;
+        // ★★★ v0.1.135：月度回顾底优先（CONTENT 放行分支会把蓝紫底交还宿主）。
+        if (paintReviewBg(v, c)) return true;
         if (sSW <= 0 || sSH <= 0) return false;
         int w;
         int h;
@@ -3665,18 +4140,10 @@ public final class BgPeel {
         }
         // 太窄的小块（图标 / 头像 / 分隔线）不铺：铺了反而像一块污渍。
         if (w * 2 < sSW) return false;
-        // ★★★ v0.1.41（r12 用户第 3 / 5 条）：**容器不再铺底，这条路整个停用**。
-        //
-        //   旧做法是在容器 draw 之前，把「整屏壁纸的某一块」画在这个容器的矩形里。
-        //   它有两个必然后果，两轮反馈都指向它：
-        //     · 第 3 条「信息卡区域卡住一块壁纸，上划不跟随」——
-        //       位图在录制那一刻按 getLocationInWindow 定死，卡片跟着列表滚动时
-        //       display list 里的 dst 不会重算 ⇒ 壁纸钉在原地；
-        //     · 第 5 条「先淡阴影、再分层出现模糊」——
-        //       容器、每张卡片、卡片头各画各的，挂载顺序不同，完成时刻就不同。
-        //
-        //   路径 A 之后不需要它了：真正的不透明底（每张卡片）自己会换颜料，
-        //   容器透明的地方本来就该露出页面壁纸。容器什么都不画 = 效果完全正确。
+        // ★★★ v0.1.140：容器铺底继续停用（与 v0.1.41 同结论）。
+        //   v0.1.139 用 paintLocal 重开后，概述只糊中间一条、菜单顶部分层 ——
+        //   ScrollView 与有底色的父面板各采各的位，动画中 winY 再一飘就错位。
+        //   有底色面板改走 paintDrawableGlass + windowLoc（布局回退），不再靠这条兜。
         noteSheetMiss(v, w, h);
         return false;
     }
@@ -6070,12 +6537,15 @@ public final class BgPeel {
             // 超宽跑马灯字条：必须保留阴影；只是不要为它反复 invalidate。
             boolean wideMarquee = sSW > 0 && tv.getWidth() > sSW + sSW / 5;
             Float last = SHADOWED.get(tv);
+            int col = shadowColor();
             // v0.1.121/122：半径缓存命中时仍写回 Paint（不 invalidate）。
-            // 开滚 / 硬件层常把阴影清掉；每帧 setShadowLayer 很轻，能稳住曲名阴影。
+            // 开滚 / 硬件层常把阴影清掉；每帧改 Paint 很轻，能稳住曲名阴影。
+            // ★ v0.1.127：稳态只碰 Paint，绝不走 TextView#setShadowLayer
+            //   （那条 API 必 invalidate，热路径会死循环）。
             if (last != null && Math.abs(last - radius) < 0.01f) {
                 if (last > 0f) {
                     Paint p0 = tv.getPaint();
-                    if (p0 != null) p0.setShadowLayer(radius, 0f, 0f, shadowColor());
+                    if (p0 != null) p0.setShadowLayer(radius, 0f, 0f, col);
                 }
                 return;
             }
@@ -6083,10 +6553,14 @@ public final class BgPeel {
             if (cueHit(tv, REVIEW_CARD_CUES) || cueHit(tv, MONTHLY_REVIEW_CUES)
                     || cueHit(tv, BUTTON_CUES)) {
                 if (last != null && last > 0f) {
-                    Paint p = tv.getPaint();
-                    if (p != null) p.clearShadowLayer();
+                    try {
+                        tv.setShadowLayer(0f, 0f, 0f, 0);
+                    } catch (Throwable t) {
+                        Paint p = tv.getPaint();
+                        if (p != null) p.clearShadowLayer();
+                        if (!wideMarquee) tv.invalidate();
+                    }
                     SHADOWED.put(tv, 0f);
-                    if (!wideMarquee) tv.invalidate();
                 } else {
                     SHADOWED.put(tv, 0f);
                 }
@@ -6112,18 +6586,94 @@ public final class BgPeel {
                     sShadowLogs++;
                 }
             }
-            Paint p = tv.getPaint();
-            if (p == null) return;
+            // ★★★ v0.1.127：首次 / 半径变化走 TextView#setShadowLayer。
+            //   只改 Paint 时 mShadowRadius 仍是 0；RN 随后 setTextColor →
+            //   updateTextColors 只恢复 mShadow*，阴影被冲掉，直到页内再切功能
+            //   触发一次完整重录才「突然有阴影」。这条 API 会写 mShadow* 并 invalidate。
             if (radius <= 0f) {
-                p.clearShadowLayer();
+                try {
+                    tv.setShadowLayer(0f, 0f, 0f, 0);
+                } catch (Throwable t) {
+                    Paint p = tv.getPaint();
+                    if (p != null) p.clearShadowLayer();
+                }
+            } else if (wideMarquee) {
+                // 超宽条：只改 Paint，避免 invalidate 放大切页抖动。
+                Paint p = tv.getPaint();
+                if (p != null) p.setShadowLayer(radius, 0f, 0f, col);
             } else {
-                p.setShadowLayer(radius, 0f, 0f, shadowColor());
+                try {
+                    tv.setShadowLayer(radius, 0f, 0f, col);
+                } catch (Throwable t) {
+                    Paint p = tv.getPaint();
+                    if (p != null) p.setShadowLayer(radius, 0f, 0f, col);
+                    tv.invalidate();
+                }
             }
             SHADOWED.put(tv, radius);
-            // 超宽条只改 Paint，等本帧/下帧自己画出来；invalidate 会放大切页抖动。
-            if (!wideMarquee) tv.invalidate();
         } catch (Throwable ignored) {
         }
+    }
+
+    /**
+     * ★★★ v0.1.126：主动给树上文字补阴影（不整树 invalidate）。
+     *
+     * <h3>为什么要单独走这一条</h3>
+     * v0.1.94 起 {@link #repaintLayers} 在武装翻转时<b>故意不作废任何 View</b>
+     * （{@code REPAINT_LAYERS_ENABLED=false}），避免切歌 200ms+。副作用是：
+     * 壁纸刚 armed / 强调色刚生效时，已经画过的 TextView <b>不会再走</b>
+     * {@code View#draw → ensureShadow}，阴影要等用户滑动/切页才出现 ——
+     * 这就是「字体阴影没有及时渲染」。
+     *
+     * <p>这里只 DFS TextView，清掉半径缓存后调 {@link #ensureShadow}
+     * （它自己会按需 invalidate 单行文字），容器与列表一律不碰。
+     */
+    private static void refreshTextShadows(View root, String why) {
+        if (!sArmed || root == null) return;
+        int n = 0;
+        try {
+            n = refreshTextShadowsWalk(root, 0, 0);
+        } catch (Throwable ignored) {
+        }
+        if (n > 0 && sDbgRedraw < DBG_REDRAW_BUDGET) {
+            sDbgRedraw++;
+            log("shadowRefresh ← " + why + " n=" + n);
+        }
+    }
+
+    private static int refreshTextShadowsWalk(View v, int depth, int n) {
+        if (v == null || depth > 40 || n >= 240) return n;
+        try {
+            if (v instanceof TextView) {
+                TextView tv = (TextView) v;
+                if (inAppWindow(tv) && !foreignModuleView(tv)) {
+                    // 清缓存强制走「设阴影 + invalidate」分支，否则半径命中只改 Paint
+                    // 不重录 display list，硬件层上仍是「没阴影」的旧帧。
+                    SHADOWED.remove(tv);
+                    ensureShadow(tv);
+                    n++;
+                }
+                return n;
+            }
+        } catch (Throwable ignored) {
+            return n;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            int c;
+            try {
+                c = g.getChildCount();
+            } catch (Throwable t) {
+                return n;
+            }
+            for (int i = 0; i < c && n < 240; i++) {
+                try {
+                    n = refreshTextShadowsWalk(g.getChildAt(i), depth + 1, n);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return n;
     }
 
     /** 诊断用：TextView 前 6 个字（看日志就知道是哪一行文字）。 */
@@ -6291,18 +6841,21 @@ public final class BgPeel {
     private static final java.util.Set<String> BIG_SURFACE =
             java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private static volatile int sBigSurfLogs;
-    private static final int BIG_SURF_LOG_BUDGET = 48;
+    private static final int BIG_SURF_LOG_BUDGET = 72;
 
     /**
-     * ★★★ v0.1.31 诊断：把所有「够大的底色」连形状一起打出来（限 26 种）。
+     * ★★★ v0.1.31 诊断：把所有「够大的底色」连形状一起打出来。
      *
-     * <p>这一条是留给下一轮的<b>终局证据</b>：不管玻璃成没成，日志里都会有一行
-     * 「这块底长什么样」——宽高 / 不透明度 / 圆角 / 颜色 / 是否命中
-     * {@link #isGlassSurface}。以后要调细则，看这一份表就够了，不用再靠猜。
+     * <p>★★★ v0.1.111（S0）：额外输出 {@code kind=}（panel / mini / icon / tab / nav /
+     * other）与 {@code leaf=}。<b>分类只写日志，不改绘制</b>。
      *
-     * <p>★★★ v0.1.111（S0）：额外输出 {@code kind=} 分类（panel / mini / icon /
-     * tab / nav / other）与 {@code leaf=}，给 chrome 扩面做面清单实证。
-     * <b>分类只写日志，不改绘制</b>（S4 等实证后再开）。
+     * <p>★★★ v0.1.124 / v0.1.125（S0 真机修订）：
+     * <ul>
+     *   <li>宿主这版 {@code r} 恒为 0 —— mini/icon <b>不再依赖半径</b>；</li>
+     *   <li>同时打 {@code top=} 与 {@code winY=}；</li>
+     *   <li>v0.1.125：mini 必须 <b>不透明</b>（α≥0xE0）且 {@code winY} 落在屏内，
+     *       挡掉半透明强调色卡片（{@code #1A……}）与动画错位帧。</li>
+     * </ul>
      */
     private static void noteBigSurface(View v, Drawable d, Rect b) {
         if (sBigSurfLogs >= BIG_SURF_LOG_BUDGET) return;
@@ -6314,7 +6867,16 @@ public final class BgPeel {
                 && h * 100 >= (long) sSH * (GLASS_MIN_H_PCT - 2);
         boolean chromeSized = !panelSized && looksLikeChromeSize(v, b);
         if (!panelSized && !chromeSized) return;
-        String kind = classifySurfaceKind(v, d, b, panelSized);
+        float dens = densityOf(v);
+        int winY = -1;
+        try {
+            int[] loc = LOC.get();
+            v.getLocationInWindow(loc);
+            winY = loc[1];
+        } catch (Throwable ignored) {
+        }
+        Integer solid = solidColorOf(d);
+        String kind = classifySurfaceKind(v, d, b, panelSized, dens, winY, solid);
         String key;
         try {
             key = v.getClass().getSimpleName() + "/" + w + "x" + h + "/" + kind;
@@ -6323,7 +6885,6 @@ public final class BgPeel {
         }
         if (!BIG_SURFACE.add(key)) return;
         sBigSurfLogs++;
-        Integer solid = solidColorOf(d);
         boolean leaf = false;
         try {
             leaf = !(v instanceof android.view.ViewGroup)
@@ -6332,7 +6893,13 @@ public final class BgPeel {
         }
         boolean glass = isGlassSurface(v, d, b);
         if (glass) kind = "panel";
-        log("surface " + key + " top=" + topOf(v) + " op=" + d.getOpacity()
+        float hDp = dens > 0.1f ? h / dens : 0f;
+        log("surface " + key
+                + " top=" + topOf(v)
+                + " winY=" + winY
+                + " hDp=" + (int) (hDp + 0.5f)
+                + " dens=" + String.format(java.util.Locale.US, "%.2f", dens)
+                + " op=" + d.getOpacity()
                 + " r=" + (int) maxRadiusOf(d)
                 + " c=" + (solid == null ? "?" : String.format("#%08X", solid))
                 + " kind=" + kind + " leaf=" + (leaf ? 1 : 0)
@@ -6344,56 +6911,92 @@ public final class BgPeel {
                 + (glass ? " => GLASS" : " => plain"));
     }
 
-    /** 廉价几何预筛：高在 36~80dp 或满宽贴顶/贴底的矮条，才值得做 chrome 分类。 */
+    private static float densityOf(View v) {
+        try {
+            float d = v.getResources().getDisplayMetrics().density;
+            if (d >= 0.5f) return d;
+        } catch (Throwable ignored) {
+        }
+        return 3f;
+    }
+
+    /**
+     * 廉价几何预筛：矮条 / 近满宽 chrome / 近方形按钮，才值得做分类。
+     * 放宽到 ≥88% 宽（真机迷你条 1176/1272≈92.5%）。
+     */
     private static boolean looksLikeChromeSize(View v, Rect b) {
         if (v == null || b == null || sSW <= 0 || sSH <= 0) return false;
         int h = b.height();
         int w = b.width();
         if (h <= 0 || w <= 0) return false;
-        // 绝对像素粗筛：约 36~80dp @3x ≈ 108~240px；也接受矮满宽条
+        // 高于 1/5 屏的不当 chrome
         if (h > sSH / 5) return false;
-        if (h < 80 && w * 100 < (long) sSW * 90) {
-            // 小块：只收近方形 / 矮胶囊
-            if (h < 90 || w > h * 4) return false;
+        float dens = densityOf(v);
+        float hDp = h / dens;
+        // 近满宽矮条（顶栏 / 底栏 / 迷你播放器）：32~90dp
+        if (w * 100 >= (long) sSW * 88 && hDp >= 32f && hDp <= 90f) return true;
+        // 近方形图标钮：36~52dp
+        if (hDp >= 36f && hDp <= 52f && w >= h * 0.85f && w <= h * 1.15f) return true;
+        // 矮胶囊图标条：高 ≤48dp、宽 36~140dp
+        if (hDp <= 48f && hDp >= 32f) {
+            float wDp = w / dens;
+            if (wDp >= 36f && wDp <= 140f) return true;
         }
-        return true;
+        return false;
     }
 
     /**
-     * S0 / S4 面分类（方案 §2.6.1 / §2.7.1）。只用于日志，<b>不驱动绘制</b>。
-     * 不调用 {@link #isGlassSurface}（热路径）；panel 由调用方事后覆盖。
+     * S0 面分类（方案 §2.6.1 / §2.7.1 + 2026-11-09 真机修订）。
+     * 只用于日志，<b>不驱动绘制</b>。圆角字段在这版宿主恒为 0，禁止当判据。
+     *
+     * <p>v0.1.125：mini 加「不透明 + winY 在屏内」，避免把列表里的半透明强调色块
+     * （{@code #1AC49933}）和动画飞出屏外的帧标成迷你播放器。
      */
-    private static String classifySurfaceKind(View v, Drawable d, Rect b, boolean panelSized) {
+    private static String classifySurfaceKind(View v, Drawable d, Rect b,
+                                              boolean panelSized, float dens, int winY,
+                                              Integer solid) {
         if (v == null || d == null || b == null || b.isEmpty()) return "other";
-        if (sSW <= 0 || sSH <= 0) return panelSized ? "other" : "other";
+        if (sSW <= 0 || sSH <= 0) return "other";
         int w = b.width();
         int h = b.height();
-        float dens = 3f;
-        try {
-            dens = v.getResources().getDisplayMetrics().density;
-            if (dens < 0.5f) dens = 3f;
-        } catch (Throwable ignored) {
-        }
+        if (dens < 0.5f) dens = 3f;
         float hDp = h / dens;
         float wDp = w / dens;
-        float r = maxRadiusOf(d);
         boolean fullW = w * 100 >= (long) sSW * 94;
+        boolean nearFullW = w * 100 >= (long) sSW * 88; // 迷你条实测 ≈92.5%
+        // winY 必须落在本窗口内（允许 ±8px 贴边误差）；超出 = 动画/独立窗口错位
+        boolean winInScreen = winY >= -8 && winY < sSH && winY + h <= sSH + 8;
         boolean bottom = false;
         boolean top = false;
-        try {
-            int[] loc = LOC.get();
-            v.getLocationInWindow(loc);
-            bottom = loc[1] + h >= sSH - sEdgeBottom - 8;
-            top = loc[1] <= sEdgeTop + 8;
-        } catch (Throwable ignored) {
+        if (winY >= 0) {
+            bottom = winInScreen && winY + h >= sSH - sEdgeBottom - 8;
+            top = winInScreen && winY <= sEdgeTop + 8;
+        } else {
+            try {
+                int[] loc = LOC.get();
+                v.getLocationInWindow(loc);
+                int y = loc[1];
+                boolean in = y >= -8 && y < sSH && y + h <= sSH + 8;
+                bottom = in && y + h >= sSH - sEdgeBottom - 8;
+                top = in && y <= sEdgeTop + 8;
+            } catch (Throwable ignored) {
+            }
         }
-        if (bottom && hDp >= 44f && hDp <= 56f && r >= h * 0.35f) return "mini";
+        // 迷你播放器：贴底 + 近满宽 + 40~56dp + 不透明底（白/深色胶囊）
+        //   真机误伤：半透明强调色 #1A…… α≈10% 的列表卡，滚动到贴底时被当成 mini。
+        boolean opaqueEnough = solid != null && ((solid >>> 24) & 0xff) >= 0xE0;
+        if (opaqueEnough && bottom && nearFullW && hDp >= 40f && hDp <= 56f) return "mini";
+        // 底部 tab 栏容器：满宽 + 56~80dp（只标记，S4 默认不上玻璃）
         if (bottom && fullW && hDp >= 56f && hDp <= 80f) return "tab";
-        if (top && fullW && hDp >= 40f && hDp <= 52f) return "nav";
-        float aspect = wDp > 0.1f ? hDp / wDp : 0f;
-        if ((aspect >= 0.9f && aspect <= 1.1f && wDp >= 36f && wDp <= 48f)
-                || (hDp <= 44f && wDp >= 36f && wDp <= 120f && r >= h * 0.3f)) {
-            return "icon";
+        // 顶部导航容器：满宽贴顶 + 32~110dp（真机顶条有 37dp 也有 ≈95~104dp）
+        if (top && fullW && hDp >= 32f && hDp <= 110f) return "nav";
+        // 圆钮 / 胶囊图标：不依赖半径；半透明色块不当 icon
+        if (opaqueEnough || solid == null) {
+            float aspect = wDp > 0.1f ? hDp / wDp : 0f;
+            if (aspect >= 0.85f && aspect <= 1.15f && wDp >= 36f && wDp <= 52f) return "icon";
+            if (hDp >= 32f && hDp <= 48f && wDp >= 36f && wDp <= 140f && !nearFullW) {
+                return "icon";
+            }
         }
         return panelSized ? "panel-cand" : "other";
     }
@@ -7318,21 +7921,9 @@ public final class BgPeel {
      */
     private static final int GLASS_BLUR_PCT = 38;
 
-    /** 面板玻璃底图（清晰壁纸模糊 {@link #GLASS_BLUR_PCT}% 后的缓存；F3 关时用）。 */
+    /** 面板玻璃底图（清晰壁纸模糊 {@link #GLASS_BLUR_PCT}% 后的缓存）。 */
     private static volatile Bitmap sWpGlassBmp;
 
-    /** F3 液态玻璃双档缓存（方案 S2）。 */
-    private static volatile Bitmap sWpGlassRegular;
-    private static volatile Bitmap sWpGlassClear;
-    /** 烘焙指纹：换壁纸 / 改 blur·tint·mode 时作废。 */
-    private static volatile String sGlassBakeFp = "";
-
-    /** 单帧玻璃块数 / 面积预算（方案 S6）。 */
-    private static final int GLASS_BLOCK_CAP = 24;
-    private static final float GLASS_AREA_CAP = 2.2f;
-    private static volatile long sGlassFrameToken;
-    private static volatile int sGlassFrameBlocks;
-    private static volatile long sGlassFrameArea;
 
     /** 玻璃失败诊断的已打条数。 */
     private static int sGlassFailLogs;
@@ -7480,10 +8071,9 @@ public final class BgPeel {
             int[] pgeo = RGEO.get();
             if (rootGeometry(v, pgeo)
                     && w * 100 >= (long) pgeo[0] * 92 && h * 100 >= (long) pgeo[1] * 20) {
-                int[] gl = new int[2];
+                int[] gl = LOC.get();
                 try {
-                    // ★★★ v0.1.98：窗口坐标（见 GlassPaint#stableWindowLoc）。
-                    GlassPaint.stableWindowLoc(v, gl);
+                    v.getLocationInWindow(gl);
                 } catch (Throwable ignored) {
                     gl[0] = 0;
                     gl[1] = 0;
@@ -7567,8 +8157,17 @@ public final class BgPeel {
             //   ⇒ loc[0] 必然 ≥ sSW ⇒ 所有面板都被判成 offscreen-window，
             //   玻璃整片消失（比错位更糟）。
             if (!rootGeometry(v, geo)) return false;
-            v.getLocationInWindow(loc);
-            if (loc[0] < -w || loc[0] >= geo[0] || loc[1] > geo[1] * 3) {
+            // ★★★ v0.1.140：位置一律走 windowLoc（坏 getLocationInWindow 时回落布局累加）。
+            //   r180040：滑入中 winY=4052/4675、导入卡 scr=1313 → offscreen-dialog
+            //   ⇒ 紫底；落位后再 OK ⇒「先紫后糊」。布局 top 全程稳定（1289/530）。
+            if (!windowLoc(v, loc)) return false;
+            if (inDialogWindow(v)) {
+                if (loc[0] + w < -8 || loc[1] + h < -8
+                        || loc[0] > geo[0] + 8 || loc[1] > geo[1] + 8) {
+                    glassNo("offscreen-dialog", v, w, h);
+                    return false;
+                }
+            } else if (loc[0] < -w || loc[0] >= geo[0] || loc[1] > geo[1] * 3) {
                 glassNo("offscreen-window", v, w, h);
                 return false;
             }
@@ -7608,20 +8207,9 @@ public final class BgPeel {
     }
 
     /**
-     * 玻璃表面该用哪张底图。
-     *
-     * <p>F3 关：既有磨砂（{@link #GLASS_BLUR_PCT}% 单次模糊，原分辨率）。
-     * F3 开：{@link LiquidGlass#bake} 双档降采样缓存（方案 S2）；draw 里只取缓存。
-     *
-     * <p>★★★ v0.1.39：撤销「糊两遍」；F3 关时仍走单次 {@link #GLASS_BLUR_PCT}% 模糊。
+     * 玻璃表面该用哪张底图（F2：壁纸 + {@link #GLASS_BLUR_PCT}% 单次模糊）。
      */
     private static Bitmap glassBmp(View v) {
-        MoriConfig cfg = RemoteConfig.get();
-        if (cfg != null && cfg.f3Enabled) {
-            Bitmap liquid = liquidGlassBmp(cfg);
-            if (liquid != null) return liquid;
-            // bake 失败 → 退回旧磨砂，绝不裸奔清晰壁纸
-        }
         Bitmap cached = sWpGlassBmp;
         if (cached != null && !cached.isRecycled()) return cached;
         Bitmap base = isPlayWindow(v) ? playBmp() : sWpBmp;
@@ -7632,69 +8220,9 @@ public final class BgPeel {
             g = io.github.ariinyume.morimod.util.BlurUtil.apply(base, GLASS_BLUR_PCT);
         } catch (Throwable ignored) {
         }
-        // ⚠️ BlurUtil 失败时是**原样返回 src** —— 那就是「清晰壁纸」。
-        //   拿它去铺面板 = 面板与背景逐像素相同 ⇒ 用户看到「这块没有面板」。
-        //   宁可返回 null（让宿主自己画原本那层深色底），也绝不铺清晰壁纸。
         if (g == null || g.isRecycled() || g == base) return null;
         sWpGlassBmp = g;
         return g;
-    }
-
-    /** 取当前 F3 档位的烘焙位图（已在 {@link #prebakeLiquidGlass} 预热）。 */
-    private static Bitmap liquidGlassBmp(MoriConfig cfg) {
-        if (cfg == null || !cfg.f3Enabled) return null;
-        LiquidGlass.Mode mode = LiquidGlass.Mode.of(cfg.f3Mode);
-        Bitmap hit = mode == LiquidGlass.Mode.CLEAR ? sWpGlassClear : sWpGlassRegular;
-        if (hit != null && !hit.isRecycled()) return hit;
-        // 热路径兜底：预烘焙还没跑完时现算一次（仍缓存）
-        prebakeLiquidGlass(cfg, sWpBmp);
-        hit = mode == LiquidGlass.Mode.CLEAR ? sWpGlassClear : sWpGlassRegular;
-        return (hit != null && !hit.isRecycled()) ? hit : null;
-    }
-
-    /**
-     * 在 applyCfg / armFlip 时机预烘焙双档液态玻璃位图。
-     * <b>绝不能在 draw 里首次触发重计算</b>（方案 §三 / S2）。
-     */
-    private static void prebakeLiquidGlass(MoriConfig cfg, Bitmap base) {
-        if (cfg == null || !cfg.f3Enabled) {
-            recycleGlass(sWpGlassRegular);
-            recycleGlass(sWpGlassClear);
-            sWpGlassRegular = null;
-            sWpGlassClear = null;
-            sGlassBakeFp = "";
-            return;
-        }
-        if (base == null || base.isRecycled()) return;
-        String fp = base.getWidth() + "x" + base.getHeight()
-                + "@" + System.identityHashCode(base)
-                + "|b" + cfg.f3Blur + "|t" + cfg.f3Tint
-                + "|m" + cfg.f3Mode;
-        if (fp.equals(sGlassBakeFp)
-                && sWpGlassRegular != null && !sWpGlassRegular.isRecycled()
-                && sWpGlassClear != null && !sWpGlassClear.isRecycled()) {
-            return;
-        }
-        long t0 = android.os.SystemClock.uptimeMillis();
-        Bitmap reg = null;
-        Bitmap clr = null;
-        try {
-            int blurR = cfg.f3Blur > 0 ? cfg.f3Blur : LiquidGlass.BLUR_REGULAR;
-            int blurC = Math.max(8, blurR * LiquidGlass.BLUR_CLEAR / LiquidGlass.BLUR_REGULAR);
-            reg = LiquidGlass.bake(base, LiquidGlass.Mode.REGULAR, blurR, cfg.f3Tint);
-            clr = LiquidGlass.bake(base, LiquidGlass.Mode.CLEAR, blurC, Math.min(100, cfg.f3Tint + 20));
-        } catch (Throwable ignored) {
-        }
-        recycleGlass(sWpGlassRegular);
-        recycleGlass(sWpGlassClear);
-        sWpGlassRegular = reg;
-        sWpGlassClear = clr;
-        // 无论成败都记下指纹，避免 apply 轮询里反复重算（失败时 glassBmp 退回旧磨砂）
-        sGlassBakeFp = fp;
-        long dt = android.os.SystemClock.uptimeMillis() - t0;
-        log("liquid bake " + (reg == null ? "-" : reg.getWidth() + "x" + reg.getHeight())
-                + "/" + (clr == null ? "-" : clr.getWidth() + "x" + clr.getHeight())
-                + " " + dt + "ms tint=" + cfg.f3Tint);
     }
 
     private static void recycleGlass(Bitmap b) {
@@ -7705,113 +8233,34 @@ public final class BgPeel {
         }
     }
 
-    /** 单帧玻璃像素 / 块数预算（方案 S6）。超了只允许「有 tint 的缓存位图」，不再开高光。 */
-    private static boolean glassBudgetOk(Rect b, boolean[] outSpecularOk) {
-        long token = android.os.SystemClock.uptimeMillis() / 16L; // ~一帧
-        if (token != sGlassFrameToken) {
-            sGlassFrameToken = token;
-            sGlassFrameBlocks = 0;
-            sGlassFrameArea = 0L;
-        }
-        if (sGlassFrameBlocks >= GLASS_BLOCK_CAP) {
-            if (outSpecularOk != null && outSpecularOk.length > 0) outSpecularOk[0] = false;
-            return false;
-        }
-        long area = (long) b.width() * b.height();
-        long screen = Math.max(1L, (long) sSW * sSH);
-        if (sGlassFrameArea + area > (long) (screen * GLASS_AREA_CAP)) {
-            if (outSpecularOk != null && outSpecularOk.length > 0) outSpecularOk[0] = false;
-            return false;
-        }
-        sGlassFrameBlocks++;
-        sGlassFrameArea += area;
-        if (outSpecularOk != null && outSpecularOk.length > 0) outSpecularOk[0] = true;
-        return true;
-    }
-
     /** 玻璃成功日志条数 / 预算（v0.1.41 探针①）。 */
     private static volatile int sGlassLogs;
     private static final int GLASS_LOG_BUDGET = 12;
 
-    /**
-     * ★★★ v0.1.41（r12 路径 A）：<b>玻璃表面的唯一落点</b>。
-     *
-     * <p>只做一件事：把这块背景 drawable 那支 {@code Paint} 的 shader 换成模糊壁纸
-     * （见 {@link GlassPaint}）。<b>不改 bounds、不改颜色字段、不接管绘制</b>。
-     *
-     * @return null = 不是玻璃表面 / 拿不到位图 / 找不到 Paint ⇒ 调用方走老路
-     */
-    private static GlassPaint.Token glassToken(Drawable d) {
-        if (!sArmed || sSW <= 0 || sSH <= 0) return null;
-        if (Boolean.TRUE.equals(REENTRY.get())) return null;
-        View v = ownerView(d);
-        if (v == null) return null;
-        Rect b = d.getBounds();
-        if (b == null || b.isEmpty()) return null;
-        if (!isGlassSurface(v, d, b)) return null;
-        // S6：块数 / 面积超预算 ⇒ 本帧不再开新玻璃
-        boolean[] specOk = {true};
-        if (!glassBudgetOk(b, specOk)) {
-            noteGlassFail("budget");
-            return null;
-        }
+    /** F2 面板玻璃：画布铺模糊壁纸并轻叠宿主原色。 */
+    private static boolean paintDrawableGlass(Drawable d, Canvas c, View v, Rect b) {
+        if (!sArmed || sSW <= 0 || sSH <= 0) return false;
+        if (Boolean.TRUE.equals(REENTRY.get())) return false;
+        if (!isGlassSurface(v, d, b)) return false;
         Bitmap g = glassBmp(v);
         if (g == null) {
             noteGlassFail("bmp");
-            return null;
+            return false;
         }
-        // ★★★ v0.1.98：宽高传<b>本窗口</b>尺寸（不是 sSW/sSH 缓存）——
-        //   浮窗里窗口 ≠ 屏幕，用缓存值就等于把玻璃按屏幕铺。
-        int[] rgeo = RGEO.get();
-        int gw = sSW;
-        int gh = sSH;
-        if (rootGeometry(v, rgeo)) {
-            gw = rgeo[0];
-            gh = rgeo[1];
-        }
-        MoriConfig cfg = RemoteConfig.get();
-        boolean liquid = cfg != null && cfg.f3Enabled;
-        boolean specular = liquid && cfg.f3Specular && specOk[0];
-        LiquidGlass.Mode mode = liquid
-                ? LiquidGlass.Mode.of(cfg.f3Mode) : LiquidGlass.Mode.REGULAR;
-        float refraction = liquid ? LiquidGlass.REFRACTION_K : 1f;
-        GlassPaint.Token tk = GlassPaint.begin(
-                d, v, b, g, gw, gh, liquid, specular, refraction, mode);
-        if (tk == null) {
-            noteGlassFail("paint");
-            return null;
-        }
+        if (!paintAligned(c, g, v, b, false)) return false;
+        int op = d.getOpacity();
+        float tint = (op == PixelFormat.OPAQUE) ? GLASS_SOLID_TINT_PCT : GLASS_TINT_PCT;
+        keepTint(c, d, b, tint);
         sSheet++;
         sPainted = true;
         GLASSED.put(v, Boolean.TRUE);
-        // 探针①：把「宿主到底拿这支 Paint 画了多大一块、在哪」记下来。
-        //   以前这里只能看到 glass -> 的条数，而 hit() 是按前缀 60 秒限流的
-        //   ⇒ 条数 ≠ 次数，前几轮据此判「没走到」全错。这条日志不走 hit()，用独立预算。
         if (sGlassLogs < GLASS_LOG_BUDGET) {
             sGlassLogs++;
-            int[] loc = LOC.get();
-            int x = -1;
-            int y = -1;
-            int rawY = -1;
-            int[] wgeo = RGEO.get();
-            try {
-                v.getLocationInWindow(loc);
-                rawY = loc[1];
-                GlassPaint.stableWindowLoc(v, loc);
-                x = loc[0];
-                y = loc[1];
-            } catch (Throwable ignored) {
-            }
-            boolean geoOk = rootGeometry(v, wgeo);
-            log("glassA -> " + name(v) + " " + b.width() + "x" + b.height()
-                    + " win=" + x + "," + y
-                    + (rawY != y ? " rawY=" + rawY : "")
-                    + " b=" + b.left + "," + b.top
-                    + " root=" + (geoOk ? wgeo[0] + "x" + wgeo[1] : "?")
-                    + " sh=1 bmp=" + g.getWidth() + "x" + g.getHeight());
+            log("glass -> " + name(v) + " " + b.width() + "x" + b.height()
+                    + " bmp=" + g.getWidth() + "x" + g.getHeight());
         }
-        hit("glassA -> ", v, b);
-        return tk;
+        hit("glass -> ", v, b);
+        return true;
     }
 
     /**
@@ -8324,13 +8773,10 @@ public final class BgPeel {
             //   「窗口比屏幕矮」、v0.1.30 猜「windowToken」—— 四次都两头错。
             //   真正的差别在<b>画面</b>上：信息卡片是「有圆角 / 半透明的块」，
             //   页面容器是「不透明、没圆角、铺满整页」。见 {@link #isGlassSurface}。
-            // ★★★ v0.1.41（r12 路径 A）：**玻璃表面在这里什么都不做，直接放行**。
-            //   BackgroundDrawable 那支 Paint 的 shader 已经在 {@link #glassToken}
-            //   里换成了模糊壁纸，宿主接下来自己 drawPath / drawRoundRect 就是玻璃，
-            //   而且圆角、位置、裁剪全部由宿主自己完成。
-            //   这里如果再自己画一遍（v0.1.31~v0.1.40 的老做法），就回到
-            //   「整屏位图 + 自己裁圆角」那条路上去了 —— 那正是「面板整块消失」的根因。
-            if (isGlassSurface(v, d, b)) return false;
+            if (paintDrawableGlass(d, c, v, b)) {
+                rememberBgOwner(d);
+                return true;
+            }
 
             // ★★★ v0.1.41（r12 用户第 8 条）：**压暗遮罩的判据必须挪到这里**。
             //   v0.1.39 把它写在 swapLeaf 里，而 swapLeaf 开头有一条铁律
@@ -8806,7 +9252,7 @@ public final class BgPeel {
             //   ★★★ v0.1.41（r12 路径 A）：这里从「铺玻璃」改成 **drop**。
             //   铺玻璃＝画一张整屏位图，落点靠 getLocationInWindow 算 ⇒ 就是
             //   「卡住一块壁纸」和「面板消失」的那条路。现在面板的玻璃来自
-            //   它自己的底色 Paint（见 glassToken），这条叶子层不画即可。
+            //   它自己的底色 drawable（见 paintDrawableGlass），这条叶子层不画即可。
             // ★★★ v0.1.97（r119 用户第 1 条）：**「叶子」整层不画的前提是它不画图。**
             //
             //   r119 现场（logcat，作品封面那层，连续十几次逐字一致）：
@@ -9178,6 +9624,7 @@ public final class BgPeel {
     private static final String[] MONTHLY_REVIEW_CUES = {
             "月度回顾", "分享月度", "正在分析播放",
             "最常听的作品", "根据播放记录",
+            "播放时长",   // 首屏「10月的播放时长」—— CD / 推荐页文案还没挂时靠它
     };
 
     /**
@@ -9322,12 +9769,13 @@ public final class BgPeel {
     }
 
     private static boolean bfsMonthlyCue(View v, int depth, int visited) {
-        if (v == null || depth > 6 || visited > 48) return false;
+        // 月度回顾文案实测在 Dialog 树深度 ~18；6 层会漏掉「分享月度 / 最常听」。
+        if (v == null || depth > 22 || visited > 160) return false;
         if (cueHit(v, MONTHLY_REVIEW_CUES)) return true;
         if (!(v instanceof ViewGroup)) return false;
         ViewGroup g = (ViewGroup) v;
         int n = g.getChildCount();
-        if (n > 10) n = 10;
+        if (n > 14) n = 14;
         int next = visited + 1;
         for (int i = 0; i < n; i++) {
             if (bfsMonthlyCue(g.getChildAt(i), depth + 1, next + i)) return true;
@@ -9721,11 +10169,18 @@ public final class BgPeel {
                     try {
                         Object self = chain.getThisObject();
                         Object a0 = chain.getArg(0);
-                        if (self instanceof View && a0 instanceof Canvas
-                                && coverBlocked((View) self)) {
-                            paintCoverMask((Canvas) a0, (View) self);
-                            traceCover((View) self, "coverBlock-drawee");
-                            return null;
+                        if (self instanceof View && a0 instanceof Canvas) {
+                            View v = (View) self;
+                            Canvas c = (Canvas) a0;
+                            // ★★★ v0.1.135：月度回顾满屏底是 ReactImageView，必须在这条路上换。
+                            if (paintReviewBg(v, c)) {
+                                return null;
+                            }
+                            if (coverBlocked(v)) {
+                                paintCoverMask(c, v);
+                                traceCover(v, "coverBlock-drawee");
+                                return null;
+                            }
                         }
                     } catch (Throwable ignored) {
                     }
@@ -9847,7 +10302,9 @@ public final class BgPeel {
             //   getLocationInWindow 天然给出「本窗口内的坐标」，配上本窗口的宽高，
             //   所有层（含 Dialog 自己的窗口）都落在同一套窗口坐标里，
             //   与 DecorView 上的 CoverDrawable 逐像素同源 ⇒ 结构上不可能再割裂。
-            v.getLocationInWindow(loc);
+            // ★★★ v0.1.140：滑入动画中 getLocationInWindow 会飞出窗外（4052…）；
+            //   改走 windowLoc，坏坐标回落布局累加，避免局部糊 / 分层。
+            if (!windowLoc(v, loc)) return false;
             if (!rootGeometry(v, geo)) return false;
         } catch (Throwable t) {
             return false;
@@ -9912,8 +10369,8 @@ public final class BgPeel {
         int[] loc = LOC.get();
         int[] geo = RGEO.get();
         try {
-            // ★★★ v0.1.98：与 {@link #paintAligned} 同一条改动 —— 窗口坐标 + 本窗口尺寸。
-            v.getLocationInWindow(loc);
+            // ★★★ v0.1.98 / v0.1.140：窗口坐标；坏则布局回退（见 windowLoc）。
+            if (!windowLoc(v, loc)) return false;
             if (!rootGeometry(v, geo)) return false;
         } catch (Throwable t) {
             return false;
@@ -9935,6 +10392,86 @@ public final class BgPeel {
             c.restoreToCount(save);
         }
         return drew;
+    }
+
+    /**
+     * ★★★ v0.1.140 / v0.1.141：本层在窗口内的落点。
+     *
+     * <p>主窗口：优先 {@code getLocationInWindow}，飞出根外时回落布局累加。
+     *
+     * <p>★★★ v0.1.141：Dialog / 底部面板<b>一律用布局坐标</b>。
+     * r181443 概述面板 {@code top=238} 却反复 {@code scr=0,492/575/2772} ——
+     * 取样 Y 比真画布大一截时，{@code paintAligned} 的位图只盖住上半，
+     * 底边一整条采空 ⇒ 透出主窗清晰壁纸 + 导航栏 =「下方空白」。
+     * 布局 top 与 {@link #topOf} 同源，滑入前后稳定。
+     */
+    private static boolean windowLoc(View v, int[] out) {
+        if (v == null || out == null || out.length < 2) return false;
+        try {
+            if (inDialogWindow(v) || insideBottomSheet(v)) {
+                return layoutLocInWindow(v, out);
+            }
+        } catch (Throwable ignored) {
+        }
+        int[] geo = RGEO.get();
+        boolean geoOk = rootGeometry(v, geo);
+        try {
+            v.getLocationInWindow(out);
+            if (geoOk && locSaneInRoot(out[0], out[1], v.getWidth(), v.getHeight(),
+                    geo[0], geo[1])) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return layoutLocInWindow(v, out);
+    }
+
+    /** 与根有足够重叠，且坐标没有离谱到数屏之外。 */
+    private static boolean locSaneInRoot(int x, int y, int w, int h, int rw, int rh) {
+        if (rw <= 0 || rh <= 0) return false;
+        if (w <= 0) w = 1;
+        if (h <= 0) h = 1;
+        if (x + w < -8 || y + h < -8 || x > rw + 8 || y > rh + 8) return false;
+        // 至少一半面积落在根内，挡住 y=2772 这种「只咬底边 1px」的假 sane
+        int ovW = Math.min(x + w, rw) - Math.max(x, 0);
+        int ovH = Math.min(y + h, rh) - Math.max(y, 0);
+        if (ovW <= 0 || ovH <= 0) return false;
+        if (ovH * 2 < Math.min(h, rh) || ovW * 2 < Math.min(w, rw)) return false;
+        return Math.abs(x) <= rw * 3L && Math.abs(y) <= rh * 3L;
+    }
+
+    /** 沿父链累加 getLeft/getTop（减 scroll），得到布局意义上的窗口坐标。 */
+    private static boolean layoutLocInWindow(View v, int[] out) {
+        if (v == null || out == null || out.length < 2) return false;
+        int x = 0;
+        int y = 0;
+        View cur = v;
+        View root;
+        try {
+            root = v.getRootView();
+        } catch (Throwable t) {
+            root = null;
+        }
+        try {
+            for (int i = 0; i < 32 && cur != null; i++) {
+                if (cur == root) break;
+                x += cur.getLeft();
+                y += cur.getTop();
+                Object p = cur.getParent();
+                if (!(p instanceof View)) break;
+                View pv = (View) p;
+                x -= pv.getScrollX();
+                y -= pv.getScrollY();
+                cur = pv;
+            }
+            out[0] = x;
+            out[1] = y;
+            return true;
+        } catch (Throwable t) {
+            out[0] = 0;
+            out[1] = 0;
+            return false;
+        }
     }
 
     /**
@@ -10386,6 +10923,11 @@ public final class BgPeel {
         }
         // ★ 判据是「壁纸真的拿得到」，不是「用户想要」—— v0.1.10 发白就是因为混用了这两者
         boolean ready = want && use != null;
+        boolean wasArmed = sArmed;
+        // ★★★ v0.1.135：关壁纸时清掉月度回顾标记。
+        if (!ready) {
+            clearReviewBgMark();
+        }
         // ★★★ v0.1.90：**「想要但这一轮拿不到位图」不是「关掉了」。**
         //   见 {@link #sArmDropTicks}：切歌 / 封面解码 / GC 都会让位图短暂不可用，
         //   旧版一抖就整树重绘 ⇒ 每次切歌两帧 200ms+。这里先记账，连续 3 轮
@@ -10418,15 +10960,7 @@ public final class BgPeel {
         //   面板玻璃直接用 sWpBarBmp（壁纸 + 20% 单次模糊）—— 双次模糊把壁纸糊成
         //   色块，用户的原话是「概述页面的高斯模糊和之前的效果不一样了」。
         //   （v0.1.38 加这张图是为了让面板「看得出是毛玻璃」，但代价是整块失去背景轮廓。）
-        // ★★★ v0.1.111：F3 液态玻璃双档在配置变更时预烘焙（draw 里只取缓存）。
-        if (ready && cfg.f3Enabled) {
-            if (cfgDirty || sWpGlassRegular == null || sWpGlassClear == null) {
-                prebakeLiquidGlass(cfg, use);
-            }
-        } else if (sWpGlassRegular != null || sWpGlassClear != null) {
-            prebakeLiquidGlass(null, null);
-        }
-        // 关 F3 / 没壁纸 / 配置变了 ⇒ 清掉旧磨砂缓存，下次按需重建
+        // 配置变了 ⇒ 清掉面板磨砂缓存；F2 关时也清（避免旧壁纸磨砂残留）
         if (!ready || cfgDirty) {
             recycleGlass(sWpGlassBmp);
             sWpGlassBmp = null;
@@ -10438,6 +10972,11 @@ public final class BgPeel {
         //   传它会让指纹在 "none" 与真实图之间反复跳，强调色跟着开开关关（还会连带
         //   触发 retintTree 把整棵树重新染色，肉眼看到的就是颜色闪）。
         AccentColor.update(use, cfg);
+
+        // ★★★ v0.1.135：窗口数增加 / 刚武装 / 入窗时未就绪 ⇒ 扫 Dialog。
+        if (ready) {
+            scanReviewWindowsIfGrew(!wasArmed || sReviewRescan);
+        }
 
         // ★★★ v0.1.98：把这个窗口挂上「尺寸变化」监听 —— 轮询要等 1.5 秒，
         //   而用户缩放浮窗是即时的：靠轮询就会出现「缩完一秒多才归位」。
@@ -10459,7 +10998,6 @@ public final class BgPeel {
             //     整树重绘会把首页 3 排横向列表（几百个 View）一起作废，实测 261ms。
             View dec = decNow != null ? decNow : decorOf(a);
             if (cfgDirty) {
-                // 计数在 invalidateTree 里统一做
                 invalidateTree(dec, "applyCfg");
             } else if (geoChanged) {
                 // ★★★ v0.1.98：**窗口尺寸变了就必须整窗重录**。
@@ -10471,6 +11009,10 @@ public final class BgPeel {
             } else {
                 repaintLayers(dec, "armFlip");
             }
+            // ★★★ v0.1.126：armed 起来后立刻补文字阴影。
+            //   armFlip / skipRedraw 不再作废 TextView ⇒ 阴影会一直等到下次自然 draw。
+            //   这里只扫 TextView（≤240），不动列表容器。
+            if (ready) refreshTextShadows(dec, cfgDirty ? "applyCfg" : "armFlip");
             // ★ v0.1.14：窗口层也要补。WindowBg 在 onResume 那一刻拿不到位图就再也不试，
             //   于是「底色被换成壁纸 + 窗口层空着」。这里每轮都叫它补一次（幂等）。
             WindowBg.retryIfMissing(a);
@@ -10906,18 +11448,12 @@ public final class BgPeel {
         sWpBarBmp = null;
         sWpPlayBmp = null;
         sWpGlassBmp = null;
-        recycleGlass(sWpGlassRegular);
-        recycleGlass(sWpGlassClear);
-        sWpGlassRegular = null;
-        sWpGlassClear = null;
-        sGlassBakeFp = "";
         // ★ v0.1.73：换壁纸 / 关功能后，「对象级底图」的账也要作废，否则内层会继续
         //   drop 给一张已经不存在的根底板。
         sPlayRootBgView = null;
         sPlayRootBgBmp = null;
         ROOT_BG.clear();
         // ★ v0.1.41：Paint 字段缓存一并作废（换壁纸 / 关功能后重新认一次）。
-        GlassPaint.reset();
         sPainted = false;
         // ★ v0.1.22：恢复默认背景 ⇒ 强调色一并关掉（用户第 4 条「开关关闭时还原宿主默认」）。
         AccentColor.reset();
@@ -10944,10 +11480,14 @@ public final class BgPeel {
         }
         for (TextView tv : list) {
             try {
-                Paint p = tv.getPaint();
-                if (p != null) p.clearShadowLayer();
+                try {
+                    tv.setShadowLayer(0f, 0f, 0f, 0);
+                } catch (Throwable t) {
+                    Paint p = tv.getPaint();
+                    if (p != null) p.clearShadowLayer();
+                    tv.invalidate();
+                }
                 SHADOWED.remove(tv);
-                tv.invalidate();
             } catch (Throwable ignored) {
             }
         }

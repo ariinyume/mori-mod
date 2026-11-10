@@ -137,12 +137,11 @@ internal fun HomeScreen(
         }
 
         // ── 美化功能 / 优化功能 ──
-        // ⚠️「系统播放控件自定义」入口已移除：宿主最新版自带该功能，本模块这一项**搁置**
-        //    （设置页没有入口，clamp() 里也强制 f1Enabled=false，能力层不会去动宿主通知栏）。
+        // F1「系统播放控件自定义」已整段移除（宿主自带；不再挂 hook / 不再保留设置页）。
         item { SectionHeader(S.SEC_BEAUTY) }
         item {
             ConnectedItems(
-                count = 4,
+                count = 3,
                 modifier = Modifier.padding(horizontal = Space.ScreenH),
             ) { i ->
                 val shape = connectedItemShape(i, 4)
@@ -159,13 +158,6 @@ internal fun HomeScreen(
                         title = S.ITEM_FONT,
                         shape = shape,
                         onClick = { onNavigate(Dest.FONT) },
-                        showChevron = true,
-                    )
-                    2 -> MoriListItem(
-                        icon = Icons.Rounded.Star,
-                        title = S.ITEM_GLASS,
-                        shape = shape,
-                        onClick = { onNavigate(Dest.GLASS) },
                         showChevron = true,
                     )
                     else -> MoriListItem(
@@ -423,8 +415,7 @@ private val StatusGlyphSize = 28.dp
 /**
  * 「待开发」小标签。
  *
- * ⚠️ 主页布局仍是待开发；液态玻璃（v0.1.111）已进独立设置页。
- * 原注释：液态玻璃 / 主页布局这两项目前只有一条 Snackbar 反馈，
+ * ⚠️ 主页布局仍是待开发；原注释：主页布局这两项目前只有一条 Snackbar 反馈，
  *    用户点完看页面没跳转，很容易判断成「点了没反应 / 功能坏了」。
  *    把状态**常驻**在行尾，用户点之前就知道它是待开发，点击后仍给一条 toast 兜底。
  */
