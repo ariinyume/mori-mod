@@ -1,6 +1,7 @@
 package io.github.ariinyume.morimod.hook;
 
 import android.app.Activity;
+import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
@@ -67,6 +68,15 @@ public final class WindowBg {
     private static final java.util.Map<View, Drawable> ORIG_DECOR =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
+    /**
+     * ★★★ v0.1.142：开屏 {@code SplashScreenView} 原背景（宿主紫底 #1C1B3D）。
+     *
+     * <p>自定义背景开启时把它透明掉，露出已经钉在 DecorView 上的壁纸；
+     * S logo 仍是 Splash 的子 View，不受影响。关掉开关时按这张表还原。
+     */
+    private static final java.util.Map<View, Drawable> ORIG_SPLASH =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     private WindowBg() {
     }
 
@@ -111,6 +121,12 @@ public final class WindowBg {
         }
         XposedCompat.log(TAG + " hooked " + ok + " Activity#onResume");
 
+        // ★★★ v0.1.143：onCreate / onStart 就钉壁纸 + 揭开屏。
+        //   r142 真机：paint splash 要等到 onResume 后 ~1.6s（16:55:20 → 16:55:22），
+        //   用户看到的「紫底很久」几乎全是这段空窗。越早 apply，紫底越短。
+        hookActivityEarly(Activity.class, "onCreate");
+        hookActivityEarly(Activity.class, "onStart");
+
         // ★ v0.1.7：离开前台就停掉 BgPeel 的视图树轮询（别在后台白跑）。
         int pz = 0;
         try {
@@ -135,8 +151,398 @@ public final class WindowBg {
         }
         XposedCompat.log(TAG + " hooked " + pz + " Activity#onPause");
 
+        // ★★★ v0.1.143：SplashScreenView 一挂到 DecorView 就立刻换底，
+        //   不等下一帧 ColorDrawable#draw / 下一轮 poll。
+        hookSplashAddView();
+
+        // ★★★ v0.1.143：splashscreen_background 取色时直接透明
+        //   （仅开屏色，不动 activityBackground —— 那条换成透明会整屏发白）。
+        hookSplashColor(cl);
+
+        // ★★★ v0.1.144：拦截宿主把紫底设回来；TypedArray 路径也拦。
+        hookSplashBackgroundSetters();
+        hookTypedArraySplashColor();
+
         // 配置变了（应用内改背景）也要立刻重钉一次
         RemoteConfig.addListener(WindowBg::reapplyAll);
+    }
+
+    /** onCreate / onStart：登记 Activity 并尽早 apply（不等 onResume）。 */
+    private static void hookActivityEarly(Class<?> act, String name) {
+        int n = 0;
+        try {
+            for (Method m : XposedCompat.findMethodsByName(act, name)) {
+                try {
+                    XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                        @Override
+                        protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                            try {
+                                Object self = chain.getThisObject();
+                                if (!(self instanceof Activity)) return;
+                                Activity a = (Activity) self;
+                                SEEN.put(a, Boolean.TRUE);
+                                apply(a);
+                                hookSplashExit(a);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                    n++;
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " Activity#" + name + " 挂钩失败: " + t);
+        }
+        XposedCompat.log(TAG + " hooked " + n + " Activity#" + name);
+    }
+
+    /**
+     * SplashScreenView 被 addView 进来的瞬间钉壁纸。
+     * 覆盖常见重载；失败只降级，不影响宿主布局。
+     */
+    private static void hookSplashAddView() {
+        int n = 0;
+        Class<?>[][] sigs = {
+                {View.class},
+                {View.class, int.class},
+                {View.class, ViewGroup.LayoutParams.class},
+                {View.class, int.class, ViewGroup.LayoutParams.class},
+        };
+        for (Class<?>[] sig : sigs) {
+            try {
+                Method m = XposedCompat.findMethodExact(ViewGroup.class, "addView", sig);
+                XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
+                    @Override
+                    protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
+                        try {
+                            Object arg0 = chain.getArg(0);
+                            if (!(arg0 instanceof View)) return;
+                            View child = (View) arg0;
+                            if (!isSplashName(child)) return;
+                            Object self = chain.getThisObject();
+                            if (self instanceof View) {
+                                Activity a = findActivity((View) self);
+                                if (a != null) {
+                                    SEEN.put(a, Boolean.TRUE);
+                                    apply(a);
+                                }
+                            }
+                            pinSplashWallpaper(child);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+                n++;
+            } catch (Throwable ignored) {
+            }
+        }
+        XposedCompat.log(TAG + " hooked " + n + " ViewGroup#addView (splash)");
+    }
+
+    /**
+     * 开屏主题色 {@code splashscreen_background} → 透明（自定义背景开启且位图就绪时）。
+     * SplashScreenView 构造时就会读到透明色，紫底从源头消掉。
+     */
+    private static void hookSplashColor(ClassLoader cl) {
+        int n = 0;
+        try {
+            Class<?> res = Resources.class;
+            Method[] ms = {
+                    XposedCompat.findMethodExact(res, "getColor", int.class),
+                    XposedCompat.findMethodExact(res, "getColor", int.class,
+                            Resources.Theme.class),
+            };
+            for (Method m : ms) {
+                if (m == null) continue;
+                try {
+                    XposedCompat.hookMethod(m, new XposedCompat.SimpleHook() {
+                        @Override
+                        protected Object after(io.github.libxposed.api.XposedInterface.Chain chain,
+                                               Object result) {
+                            try {
+                                if (!(result instanceof Integer)
+                                        && !(result instanceof Number)) {
+                                    return result;
+                                }
+                                Object thisObj = chain.getThisObject();
+                                Object arg0 = chain.getArg(0);
+                                if (!(thisObj instanceof Resources)
+                                        || !(arg0 instanceof Integer)) {
+                                    return result;
+                                }
+                                if (!shouldClearSplashColor(
+                                        (Resources) thisObj, (Integer) arg0)) {
+                                    return result;
+                                }
+                                if (sSplashColorLogs < 4) {
+                                    sSplashColorLogs++;
+                                    XposedCompat.log(TAG
+                                            + " splashscreen_background -> transparent");
+                                }
+                                return 0;      // fully transparent
+                            } catch (Throwable ignored) {
+                                return result;
+                            }
+                        }
+                    });
+                    n++;
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " splash color hook FAILED: " + t);
+        }
+        XposedCompat.log(TAG + " hooked " + n + " Resources#getColor (splash)");
+    }
+
+    private static volatile int sSplashColorLogs;
+    private static volatile int sSplashColorId;
+    private static final java.util.Set<Integer> SPLASH_COLOR_MISS =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static boolean shouldClearSplashColor(Resources res, int id) {
+        if (id == 0) return false;
+        MoriConfig cfg = RemoteConfig.get();
+        if (!FeatureF2.hasWallpaper(cfg)) return false;
+        // 位图还没好就别透明 —— 否则开屏会露出白/黑洞
+        if (FeatureF2.wallpaperBitmap(cfg) == null) return false;
+        if (id == sSplashColorId && sSplashColorId != 0) return true;
+        if (SPLASH_COLOR_MISS.contains(id)) return false;
+        try {
+            String name = res.getResourceEntryName(id);
+            if (name != null && name.contains("splashscreen_background")) {
+                sSplashColorId = id;
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        SPLASH_COLOR_MISS.add(id);
+        return false;
+    }
+
+    /** 已装过开屏退出监听的 Activity（弱引用，防泄漏）。 */
+    private static final java.util.Map<Activity, Boolean> SPLASH_EXIT =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * API 31+：接管开屏退出动画，首帧就把 Splash 底换成壁纸并立刻 remove，
+     * 跳过宿主那一段紫底淡出。
+     */
+    private static void hookSplashExit(Activity a) {
+        if (a == null || android.os.Build.VERSION.SDK_INT < 31) return;
+        if (SPLASH_EXIT.containsKey(a)) return;
+        try {
+            Object splash = a.getClass().getMethod("getSplashScreen").invoke(a);
+            if (splash == null) return;
+            Class<?> listenerClz = Class.forName(
+                    "android.window.SplashScreen$OnExitAnimationListener");
+            Object listener = java.lang.reflect.Proxy.newProxyInstance(
+                    listenerClz.getClassLoader(),
+                    new Class<?>[]{listenerClz},
+                    (proxy, method, args) -> {
+                        try {
+                            // 系统认为可以退开屏（内容已就绪）才走到这里。
+                            // 先保证底是壁纸，再 remove —— 过渡 = 壁纸+logo → 主页，
+                            // 不会再出现「光秃壁纸卡住」那一帧。
+                            if (args != null && args.length > 0 && args[0] != null) {
+                                Object provider = args[0];
+                                Object view = provider.getClass()
+                                        .getMethod("getView").invoke(provider);
+                                if (view instanceof View) {
+                                    pinSplashWallpaper((View) view);
+                                }
+                                provider.getClass().getMethod("remove").invoke(provider);
+                                XposedCompat.log(TAG + " splash exit: pinned+removed");
+                            }
+                        } catch (Throwable t) {
+                            XposedCompat.log(TAG + " splash exit FAILED: " + t);
+                        }
+                        return null;
+                    });
+            splash.getClass()
+                    .getMethod("setOnExitAnimationListener", listenerClz)
+                    .invoke(splash, listener);
+            SPLASH_EXIT.put(a, Boolean.TRUE);
+            XposedCompat.log(TAG + " splash exit listener installed");
+        } catch (Throwable t) {
+            // 老 androidx SplashScreen / ROM 差异：静默跳过
+        }
+    }
+
+    private static boolean isSplashName(View v) {
+        if (v == null) return false;
+        try {
+            return v.getClass().getSimpleName().indexOf("Splash") >= 0;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 宿主开屏紫（{@code splashscreen_background} / {@code activityBackground}）。 */
+    private static final int HOST_SPLASH_PURPLE = 0xFF1C1B3D;
+
+    /**
+     * 给 Splash 挂一份**独立** CoverDrawable（不能复用 DecorView 那份单例）。
+     *
+     * <p>★★★ v0.1.145：<b>不再强制 remove 开屏</b>。
+     * r144 真机用户反馈「紫 → 卡住显示壁纸 → 再进主页」，就是
+     * {@code splash force-removed} 把 Splash（含 S logo）拆掉后，
+     * RN 还没画完，中间空了一段只有 DecorView 壁纸。
+     * 正确做法：开屏层留着，只把紫底换成壁纸，S logo 继续在；
+     * 等系统 / Expo 正常退出开屏时再走 {@link #hookSplashExit}。
+     */
+    private static void pinSplashWallpaper(View splash) {
+        if (splash == null) return;
+        MoriConfig cfg = RemoteConfig.get();
+        if (!FeatureF2.hasWallpaper(cfg)) return;
+        android.graphics.Bitmap bmp = FeatureF2.wallpaperBitmap(cfg);
+        if (bmp == null || bmp.isRecycled()) {
+            clearOneSplash(splash);
+            return;
+        }
+        Drawable cur;
+        try {
+            cur = splash.getBackground();
+        } catch (Throwable t) {
+            cur = null;
+        }
+        if (cur instanceof io.github.ariinyume.morimod.view.CoverDrawable) return;
+        rememberSplashOrig(splash, cur);
+        try {
+            // 设背景时暂时放开闸，避免 setBackground 钩子重入
+            sPinningSplash = true;
+            splash.setBackground(new io.github.ariinyume.morimod.view.CoverDrawable(
+                    bmp, cfg.f2MaskAlpha));
+            XposedCompat.log(TAG + " splash wallpaper pinned: "
+                    + splash.getClass().getSimpleName()
+                    + " " + splash.getWidth() + "x" + splash.getHeight());
+        } catch (Throwable t) {
+            clearOneSplash(splash);
+        } finally {
+            sPinningSplash = false;
+        }
+    }
+
+    private static volatile boolean sPinningSplash;
+
+    /**
+     * 宿主 / 系统 Splash API 常在布局后再 {@code setBackgroundColor(#1C1B3D)}，
+     * 把我们钉的壁纸盖回去。这里直接吞掉紫，改钉壁纸。
+     */
+    private static void hookSplashBackgroundSetters() {
+        int n = 0;
+        try {
+            Method m = XposedCompat.findMethodExact(View.class, "setBackgroundColor", int.class);
+            XposedCompat.hookMethod(m, chain -> {
+                try {
+                    Object self = chain.getThisObject();
+                    if (self instanceof View && !sPinningSplash
+                            && isSplashName((View) self)
+                            && wallpaperReady()) {
+                        Object arg0 = chain.getArg(0);
+                        int color = arg0 instanceof Integer ? (Integer) arg0 : 0;
+                        if (isHostSplashPurple(color) || color != 0) {
+                            pinSplashWallpaper((View) self);
+                            return null;      // 不让紫底设上去
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+                return chain.proceed();
+            });
+            n++;
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " setBackgroundColor hook FAILED: " + t);
+        }
+        try {
+            Method m = XposedCompat.findMethodExact(View.class, "setBackground", Drawable.class);
+            XposedCompat.hookMethod(m, chain -> {
+                try {
+                    Object self = chain.getThisObject();
+                    Object arg0 = chain.getArg(0);
+                    if (self instanceof View && !sPinningSplash
+                            && isSplashName((View) self)
+                            && wallpaperReady()) {
+                        if (arg0 instanceof io.github.ariinyume.morimod.view.CoverDrawable) {
+                            return chain.proceed();
+                        }
+                        // 任何非壁纸底（含 ColorDrawable 紫）都改钉壁纸
+                        pinSplashWallpaper((View) self);
+                        return null;
+                    }
+                } catch (Throwable ignored) {
+                }
+                return chain.proceed();
+            });
+            n++;
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " setBackground hook FAILED: " + t);
+        }
+        XposedCompat.log(TAG + " hooked " + n + " View#setBackground* (splash)");
+    }
+
+    /**
+     * 主题解析常走 {@code TypedArray.getColor}，不经 {@code Resources.getColor}。
+     * 命中宿主开屏紫就改透明（仅在壁纸就绪时）。
+     */
+    private static void hookTypedArraySplashColor() {
+        int n = 0;
+        try {
+            Class<?> ta = android.content.res.TypedArray.class;
+            Method m = XposedCompat.findMethodExact(ta, "getColor", int.class, int.class);
+            XposedCompat.hookMethod(m, new XposedCompat.SimpleHook() {
+                @Override
+                protected Object after(io.github.libxposed.api.XposedInterface.Chain chain,
+                                       Object result) {
+                    try {
+                        if (!(result instanceof Integer)) return result;
+                        int c = (Integer) result;
+                        if (!isHostSplashPurple(c)) return result;
+                        if (!wallpaperReady()) return result;
+                        if (sSplashColorLogs < 6) {
+                            sSplashColorLogs++;
+                            XposedCompat.log(TAG
+                                    + " TypedArray splash purple -> transparent");
+                        }
+                        return 0;
+                    } catch (Throwable t) {
+                        return result;
+                    }
+                }
+            });
+            n++;
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " TypedArray.getColor hook FAILED: " + t);
+        }
+        XposedCompat.log(TAG + " hooked " + n + " TypedArray#getColor (splash)");
+    }
+
+    private static boolean wallpaperReady() {
+        try {
+            MoriConfig cfg = RemoteConfig.get();
+            return FeatureF2.hasWallpaper(cfg)
+                    && FeatureF2.wallpaperBitmap(cfg) != null;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean isHostSplashPurple(int color) {
+        // 忽略 alpha 差异：#FF1C1B3D / #1C1B3D
+        return (color & 0x00FFFFFF) == (HOST_SPLASH_PURPLE & 0x00FFFFFF);
+    }
+
+    private static Activity findActivity(View v) {
+        try {
+            android.content.Context c = v.getContext();
+            while (c instanceof android.content.ContextWrapper) {
+                if (c instanceof Activity) return (Activity) c;
+                c = ((android.content.ContextWrapper) c).getBaseContext();
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     /**
@@ -296,7 +702,12 @@ public final class WindowBg {
         // 同一个 Activity 重复 onResume（切页返回）时不必再设一遍；
         // 但如果这个 DecorView 换过了（Activity 重建），必须重新铺。
         String scoped = key + "@" + System.identityHashCode(a);
-        if (scoped.equals(sAppliedKey) && decorIsMine(decor)) return;
+        if (scoped.equals(sAppliedKey) && decorIsMine(decor)) {
+            // ★★★ v0.1.142：窗口层已钉上，但 SplashScreenView 可能是*之后*才挂上来的
+            //   （冷启动：先 DecorView，再系统 Splash API 塞子 View）。每轮都扫一次。
+            clearSplashPurple(decor);
+            return;
+        }
 
         try {
             // 第一次动这个 DecorView 之前把原背景留档 —— 关掉开关时要还原，
@@ -308,9 +719,95 @@ public final class WindowBg {
             sAppliedKey = scoped;
             XposedCompat.log(TAG + " window bg applied: " + a.getClass().getName()
                     + " (image)");
+            // ★★★ v0.1.142：顺手揭掉开屏紫底（见 {@link #clearSplashPurple}）。
+            clearSplashPurple(decor);
             diagOnce(decor);
         } catch (Throwable t) {
             XposedCompat.log(TAG + " setBackground failed: " + t);
+        }
+    }
+
+    /**
+     * ★★★ v0.1.142：自定义背景已钉上时，把 {@code SplashScreenView} 的紫底揭掉。
+     *
+     * <p>宿主开屏主题色是 {@code #FF1C1B3D}（{@code splashscreen_background}）。
+     * 真机日志里它是 DecorView 的直接子 View，自己挂着不透明 {@code ColorDrawable}，
+     * 盖住我们已经铺好的窗口壁纸 —— 用户看到的就是启动瞬间那一屏紫。
+     *
+     * <p>这里只把 Splash 自己的背景透明掉（或清空），<b>不</b>把壁纸 Drawable
+     * 再挂到 Splash 上：{@link FeatureF2#windowDrawable} 是单例
+     * {@link io.github.ariinyume.morimod.view.CoverDrawable}，同一份不能同时
+     * callback 给 DecorView 和 Splash。透出 DecorView 那层就够了，S logo 仍在。
+     *
+     * <p>幂等：每轮 {@link #apply} / {@link #retryIfMissing} 都可调用；
+     * Splash 已揭过或已消失时直接返回。
+     */
+    public static void clearSplashPurple(View decor) {
+        if (decor == null) return;
+        try {
+            findAndClearSplash(decor, 0);
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " splash clear FAILED: " + t);
+        }
+    }
+
+    private static void findAndClearSplash(View v, int depth) {
+        if (v == null || depth > 3) return;
+        String sn;
+        try {
+            sn = v.getClass().getSimpleName();
+        } catch (Throwable t) {
+            return;
+        }
+        if (sn != null && sn.indexOf("Splash") >= 0) {
+            // ★★★ v0.1.143：优先钉壁纸；位图未就绪时再退回透明
+            pinSplashWallpaper(v);
+            return;
+        }
+        if (!(v instanceof ViewGroup)) return;
+        ViewGroup g = (ViewGroup) v;
+        int n = g.getChildCount();
+        for (int i = 0; i < n; i++) {
+            findAndClearSplash(g.getChildAt(i), depth + 1);
+        }
+    }
+
+    private static void clearOneSplash(View splash) {
+        Drawable cur;
+        try {
+            cur = splash.getBackground();
+        } catch (Throwable t) {
+            return;
+        }
+        if (cur instanceof io.github.ariinyume.morimod.view.CoverDrawable) return;
+        // 已经透明 / 空 ⇒ 不用再动（避免每轮 setBackground 触发多余重绘）
+        if (cur == null) {
+            rememberSplashOrig(splash, null);
+            return;
+        }
+        if (cur instanceof android.graphics.drawable.ColorDrawable) {
+            int c = ((android.graphics.drawable.ColorDrawable) cur).getColor();
+            if (android.graphics.Color.alpha(c) == 0) {
+                rememberSplashOrig(splash, cur);
+                return;
+            }
+        }
+        rememberSplashOrig(splash, cur);
+        try {
+            splash.setBackgroundColor(0);
+            XposedCompat.log(TAG + " splash purple cleared: "
+                    + splash.getClass().getSimpleName()
+                    + " " + splash.getWidth() + "x" + splash.getHeight());
+        } catch (Throwable t) {
+            XposedCompat.log(TAG + " splash setBackground failed: " + t);
+        }
+    }
+
+    private static void rememberSplashOrig(View splash, Drawable cur) {
+        synchronized (ORIG_SPLASH) {
+            if (!ORIG_SPLASH.containsKey(splash)) {
+                ORIG_SPLASH.put(splash, cur);
+            }
         }
     }
 
@@ -336,6 +833,31 @@ public final class WindowBg {
             }
         }
         XposedCompat.log(TAG + " decor restored (" + keys.size() + ")");
+        restoreSplash();
+    }
+
+    /** 还原开屏紫底（关自定义背景时）。 */
+    private static void restoreSplash() {
+        java.util.List<View> keys;
+        synchronized (ORIG_SPLASH) {
+            if (ORIG_SPLASH.isEmpty()) return;
+            keys = new java.util.ArrayList<>(ORIG_SPLASH.keySet());
+        }
+        int n = 0;
+        for (View v : keys) {
+            Drawable orig;
+            synchronized (ORIG_SPLASH) {
+                orig = ORIG_SPLASH.remove(v);
+            }
+            try {
+                if (v != null) {
+                    v.setBackground(orig);
+                    n++;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (n > 0) XposedCompat.log(TAG + " splash restored (" + n + ")");
     }
 
     /**

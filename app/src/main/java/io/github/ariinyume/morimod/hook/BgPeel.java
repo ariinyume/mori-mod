@@ -8755,6 +8755,28 @@ public final class BgPeel {
             }
             noteBigSurface(v, d, b);
 
+            // ★★★ v0.1.142：开屏 SplashScreenView 的紫底（#1C1B3D）。
+            //   自定义背景开启且窗口层已钉壁纸时，这一层只负责挡视线 ——
+            //   不画紫底即可透出 DecorView 上的 CoverDrawable，S logo 仍是子 View。
+            //   画路径兜底：宿主淡出动画里可能把紫底 ColorDrawable 又设回来，
+            //   单靠 WindowBg#clearSplashPurple 的 setBackground 会和它打架。
+            if (isSplashView(v)) {
+                Bitmap splashBmp = sWpBmp != null ? sWpBmp : sWpBarBmp;
+                if (splashBmp != null) {
+                    if (paintAligned(c, splashBmp, v, b, false)) {
+                        sSkipped++;
+                        sPainted = true;
+                        hit("paint splash -> ", v, b);
+                        return true;
+                    }
+                    // 画失败也绝不再画紫：透出 DecorView 壁纸
+                    sScrim++;
+                    sPainted = true;
+                    hit("drop splash -> ", v, b);
+                    return true;
+                }
+            }
+
             // ★★★ v0.1.29 用户第 2 条（这是「信息卡片挂不上高斯模糊」的真凶）：
             //   面板分支<b>必须排在「满屏」之前</b>。面板窗口是 wrap 的
             //   —— 窗口就是面板本身 —— 所以面板自己的背景 drawable <b>正好铺满窗口</b>，
@@ -9601,7 +9623,7 @@ public final class BgPeel {
         View cur = v;
         for (int i = 0; i < 14 && cur != null; i++) {
             try {
-                if (cur.getClass().getSimpleName().indexOf("Splash") >= 0) return true;
+                if (isSplashView(cur)) return true;
             } catch (Throwable ignored) {
             }
             Object par;
@@ -9613,6 +9635,19 @@ public final class BgPeel {
             cur = par instanceof View ? (View) par : null;
         }
         return false;
+    }
+
+    /**
+     * ★★★ v0.1.142：是不是系统 / androidx 开屏根（{@code SplashScreenView}）。
+     * 类名带 Splash 即可，不绑具体包名（ROM / androidx 路径会变）。
+     */
+    private static boolean isSplashView(View v) {
+        if (v == null) return false;
+        try {
+            return v.getClass().getSimpleName().indexOf("Splash") >= 0;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /** 首页回顾卡片用的短文案（只在卡片级容器里匹配）。 */
@@ -11026,6 +11061,10 @@ public final class BgPeel {
                         + " accent=" + (AccentColor.on() ? "on" : "off")
                         + "/" + AccentColor.styleName());
             }
+        } else if (ready) {
+            // ★★★ v0.1.142：armed 稳态下也扫开屏 —— Splash 常在首轮 apply 之后才挂上，
+            //   changed=false 时 retryIfMissing 不会走，紫底会一直盖到淡出结束。
+            WindowBg.clearSplashPurple(decNow != null ? decNow : decorOf(a));
         }
         maybeSummary();
     }

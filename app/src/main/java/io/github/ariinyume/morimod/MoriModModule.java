@@ -312,6 +312,12 @@ public class MoriModModule extends XposedModule {
                         RemoteConfig.reload(appCtx);
                         XposedCompat.log("[MoriMod] Application attached, config channel ready ("
                                 + RemoteConfig.source() + ")");
+                        // ★★★ v0.1.143：配置一就绪就预热壁纸位图。
+                        //   开屏 Splash 常在 onResume 前就画出来；位图晚到 ⇒ 紫底空等 1~2 秒。
+                        try {
+                            FeatureF2.wallpaperBitmap(RemoteConfig.get());
+                        } catch (Throwable ignored) {
+                        }
                         // 应答器已就位 ⇒ 现在要配置一定收得到。本地副本读不到就主动向模块应用要。
                         if ("defaults".equals(RemoteConfig.source())) {
                             ConfigBus.requestConfigWithRetry(appCtx);
