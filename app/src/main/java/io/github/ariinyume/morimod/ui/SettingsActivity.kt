@@ -28,6 +28,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.ariinyume.morimod.config.Protocol
 import io.github.ariinyume.morimod.ui.screens.HomeScreen
@@ -70,6 +72,12 @@ private fun MoriApp() {
     val vm: MoriViewModel = viewModel()
     val snackbar = remember { SnackbarHostState() }
     val ctx = LocalContext.current
+
+    // 从二级页返回时对齐磁盘，避免主页旧快照覆盖壁纸 / F5 / 字体等
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.reloadFromStore()
+        vm.tickHostStatus()
+    }
 
     // ── 宿主作用域探测 ────────────────────────────────────────────────
     // 必须**持续**探：第一次进设置页时宿主大概率还没起来，只探一次会把状态

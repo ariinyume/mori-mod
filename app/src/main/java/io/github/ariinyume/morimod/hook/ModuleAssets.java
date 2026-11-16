@@ -2,9 +2,6 @@ package io.github.ariinyume.morimod.hook;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.os.ParcelFileDescriptor;
 
@@ -303,47 +300,6 @@ public final class ModuleAssets {
         } catch (Throwable t) {
             DiagLog.event("asset", nameOrPath + " 解码异常 " + t.getClass().getSimpleName());
             return null;
-        }
-    }
-
-    /**
-     * 把背景图 + 黑色遮罩合成一张 PNG 字节流（RN 图片加载器路径用）。
-     *
-     * <p>为什么要烘进像素：RN 侧会按 resizeMode=cover 做裁剪，
-     * 若把遮罩留到 View 层画，裁剪后位置就会偏。烘进像素后怎么裁都对齐。
-     *
-     * @param src     已解码的背景位图（不会被修改）
-     * @param maskPct 遮罩浓度 0–100
-     * @return PNG 字节；失败返回 null
-     */
-    public static byte[] composePng(Bitmap src, int maskPct) {
-        if (src == null || src.isRecycled()) return null;
-        int pct = Math.max(0, Math.min(100, maskPct));
-        Bitmap work = src;
-        Bitmap masked = null;
-        try {
-            if (pct > 0) {
-                masked = Bitmap.createBitmap(src.getWidth(), src.getHeight(),
-                        Bitmap.Config.ARGB_8888);
-                Canvas c = new Canvas(masked);
-                c.drawBitmap(src, 0f, 0f, null);
-                Paint p = new Paint();
-                p.setColor(Color.BLACK);
-                p.setAlpha((int) (pct / 100f * 255f));
-                c.drawRect(0f, 0f, masked.getWidth(), masked.getHeight(), p);
-                work = masked;
-            }
-            ByteArrayOutputStream bos = new ByteArrayOutputStream(
-                    Math.min(8 * 1024 * 1024, Math.max(64 * 1024, work.getByteCount() / 4)));
-            if (!work.compress(Bitmap.CompressFormat.PNG, 100, bos)) {
-                return null;
-            }
-            return bos.toByteArray();
-        } catch (Throwable t) {
-            DiagLog.event("asset", "背景合成失败 " + t.getClass().getSimpleName());
-            return null;
-        } finally {
-            if (masked != null && masked != src) masked.recycle();
         }
     }
 

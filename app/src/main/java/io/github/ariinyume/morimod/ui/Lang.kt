@@ -13,9 +13,11 @@ import androidx.compose.runtime.setValue
 internal enum class Lang(val code: String, val label: String) {
     ZH_CN("zh-CN", "简中"),
     ZH_TW("zh-TW", "繁中"),
-    EN("en", "EN");
+    EN("en", "EN"),
+    JA("ja", "日本語"),
+    KO("ko", "한국어");
 
-    /** 下一个语言（按钮循环切换）。 */
+    /** 下一个语言（按钮循环：简中→繁中→EN→日本語→한국어）。 */
     fun next(): Lang = entries[(ordinal + 1) % entries.size]
 
     companion object {
@@ -98,6 +100,22 @@ internal abstract class MoriStrings {
     /** 长按删除背景图的确认文案。 */
     abstract val F2_DELETE_BODY: String
 
+    // ── F5 主页布局 ────────────────────────────────────────────────
+    abstract val F5_TITLE: String
+    abstract val F5_ENABLE: String
+    abstract val F5_NOTE: String
+    abstract val F5_MODULES: String
+    abstract val F5_RESTORE: String
+    abstract val F5_MOVE_UP: String
+    abstract val F5_MOVE_DOWN: String
+    abstract val F5_MOD_GENRE: String
+    abstract val F5_MOD_RECENT_PURCHASE: String
+    abstract val F5_MOD_RECENT_PLAYED: String
+    abstract val F5_MOD_MY_SOUND: String
+    abstract val F5_MOD_RECAP: String
+    abstract val F5_MOD_SYNC: String
+    abstract val F5_MOD_UNKNOWN: String
+    abstract val TOAST_F5_NEED_LOGIN: String
 
     // ── F4 字体 ────────────────────────────────────────────────────
     abstract val F4_TITLE: String
@@ -272,6 +290,21 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_CROP_FAILED = "裁剪失败，已保留原图"
     override val F2_DELETE_BODY = "会从图库里删掉这张图。如果它正被用作宿主背景，背景会一并恢复成宿主默认。"
 
+    override val F5_TITLE = "主页模块布局"
+    override val F5_ENABLE = "启用主页布局调整"
+    override val F5_NOTE = "该功能仅影响处于登录态的宿主首页。"
+    override val F5_MODULES = "主页区块"
+    override val F5_RESTORE = "恢复默认布局"
+    override val F5_MOVE_UP = "上移"
+    override val F5_MOVE_DOWN = "下移"
+    override val F5_MOD_GENRE = "类型"
+    override val F5_MOD_RECENT_PURCHASE = "最近购买"
+    override val F5_MOD_RECENT_PLAYED = "最近听过的作品"
+    override val F5_MOD_MY_SOUND = "稍后再听"
+    override val F5_MOD_RECAP = "回顾"
+    override val F5_MOD_SYNC = "同步已购买的作品"
+    override val F5_MOD_UNKNOWN = "未知区块"
+    override val TOAST_F5_NEED_LOGIN = "DLsiteSound未登录，无法使用此功能。"
 
     override val F4_TITLE = "主程序字体替换"
     override val F4_CARD = "启用字体替换"
@@ -430,6 +463,21 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_CROP_FAILED = "裁剪失敗，已保留原圖"
     override val F2_DELETE_BODY = "會從圖庫裡刪掉這張圖。如果它正被用作宿主背景，背景會一併還原成宿主預設。"
 
+    override val F5_TITLE = "首頁模組版面"
+    override val F5_ENABLE = "啟用首頁版面調整"
+    override val F5_NOTE = "此功能僅影響處於登入態的宿主首頁。"
+    override val F5_MODULES = "首頁區塊"
+    override val F5_RESTORE = "恢復預設版面"
+    override val F5_MOVE_UP = "上移"
+    override val F5_MOVE_DOWN = "下移"
+    override val F5_MOD_GENRE = "類型"
+    override val F5_MOD_RECENT_PURCHASE = "最近購買"
+    override val F5_MOD_RECENT_PLAYED = "最近聽過的作品"
+    override val F5_MOD_MY_SOUND = "稍後再聽"
+    override val F5_MOD_RECAP = "回顧"
+    override val F5_MOD_SYNC = "同步已購買的作品"
+    override val F5_MOD_UNKNOWN = "未知區塊"
+    override val TOAST_F5_NEED_LOGIN = "DLsiteSound未登入，無法使用此功能。"
 
     override val F4_TITLE = "主程式字型替換"
     override val F4_CARD = "啟用字型替換"
@@ -588,6 +636,22 @@ internal object En : MoriStrings() {
     override val TOAST_CROP_FAILED = "Crop failed — original image kept"
     override val F2_DELETE_BODY = "This removes the image from your library. If it is the current app background, the background is restored to the host default as well."
 
+    override val F5_TITLE = "Home layout"
+    override val F5_ENABLE = "Enable home layout tweaks"
+    override val F5_NOTE = "This only affects the host home screen while you are signed in."
+    override val F5_MODULES = "Home sections"
+    override val F5_RESTORE = "Restore default layout"
+    override val F5_MOVE_UP = "Move up"
+    override val F5_MOVE_DOWN = "Move down"
+    override val F5_MOD_GENRE = "Genres"
+    override val F5_MOD_RECENT_PURCHASE = "Recently Purchased"
+    override val F5_MOD_RECENT_PLAYED = "Recently Listened"
+    override val F5_MOD_MY_SOUND = "Listen Later"
+    override val F5_MOD_RECAP = "PlayBack"
+    override val F5_MOD_SYNC = "Sync purchased works"
+    override val F5_MOD_UNKNOWN = "Unknown section"
+    override val TOAST_F5_NEED_LOGIN = "DLsiteSound is not signed in. This feature is unavailable."
+
 
     override val F4_TITLE = "App font"
     override val F4_CARD = "Enable font replacement"
@@ -692,6 +756,354 @@ internal object En : MoriStrings() {
 
 }
 
+internal object Ja : MoriStrings() {
+    override val APP_TITLE = "Mori MOD"
+    override val HOME_SUBTITLE = "DLsiteSound experience enhancer"
+    override val BACK = "戻る"
+
+    override val STATUS_TITLE = "Status"
+    override val STATUS_PLUGIN = "Module version"
+    override val STATUS_HOST = "DLsiteSound version"
+    override val STATUS_RUNTIME = "Runtime"
+    override val STATUS_CHECKING = "Checking…"
+    override val STATUS_ACTIVE = "Running"
+    override val STATUS_INACTIVE = "Not running"
+    override val STATUS_HOST_MISSING = "Not installed"
+
+    override val SEC_FEATURES = "機能設定"
+    override val SEC_BEAUTY = "美化"
+    override val SEC_OPTIMIZE = "最適化"
+    override val SEC_MANAGE = "モジュール管理"
+
+    override val ITEM_BACKGROUND = "背景カスタム"
+    override val ITEM_FONT = "フォント置換"
+    override val ITEM_LAYOUT = "ホームレイアウト"
+    override val ITEM_COVER_BLOCK = "作品カバーを非表示"
+    override val ITEM_COVER_BLOCK_SUM = "全画面で作品カバーを非表示（タップは可能）"
+    override val ITEM_PERF = "曲名・作品名のスクロールを停止"
+    override val ITEM_PERF_SUM = "実験的。再生画面の曲名・作品名を固定"
+    override val ITEM_HIDE_ICON = "ランチャーアイコンを非表示"
+    override val ITEM_DEBUG_LOG = "デバッグログ"
+    override val ITEM_DEBUG_LOG_SUM = "既定オフ。LSPosedログに出力"
+    override val ITEM_BACKUP = "エクスポートとバックアップ"
+    override val ITEM_BACKUP_SUM = "設定テキストの書き出し／バックアップから復元"
+    override val ITEM_ABOUT = "情報"
+
+    override val F2_TITLE = "アプリ背景"
+    override val F2_ENABLE = "有効化"
+    override val F2_CARD = "アプリ背景の差し替え"
+    override val F2_BLUR = "背景ぼかし"
+    override val F2_PLAY_BLUR = "再生画面の背景ぼかし"
+    override val F2_ACCENT = "壁紙からアクセント色"
+    override val F2_ACCENT_NOTE = "Tints every non-white text and all shadow overlays in the host with an accent colour extracted from your wallpaper. Turn off to restore the host defaults."
+    override val F2_ACCENT_STYLE = "Accent style"
+    override val F2_CURRENT_NONE = "Current: host default"
+    override val F2_CURRENT = "Current background"
+    override val F2_MY_BGS = "My backgrounds"
+    override val F2_MY_BGS_NOTE = "jpg / png / webp: tap to apply, long-press to delete"
+    override val F2_MY_BGS_EMPTY = "No background imported yet."
+    override val CROP_TITLE = "Crop background"
+    override val CROP_HINT = "Pinch to zoom, drag to move. The framed area fills the app background at screen ratio."
+    override val BTN_CROP_SKIP = "Skip cropping"
+    override val BTN_CROP_USE = "Use this area"
+    override val TOAST_CROP_FAILED = "Crop failed — original image kept"
+    override val F2_DELETE_BODY = "This removes the image from your library. If it is the current app background, the background is restored to the host default as well."
+
+    override val F5_TITLE = "ホームレイアウト"
+    override val F5_ENABLE = "ホームレイアウト調整を有効化"
+    override val F5_NOTE = "この機能はログイン中のホストホーム画面にのみ影響します。"
+    override val F5_MODULES = "ホームセクション"
+    override val F5_RESTORE = "デフォルトレイアウトに戻す"
+    override val F5_MOVE_UP = "上へ"
+    override val F5_MOVE_DOWN = "下へ"
+    override val F5_MOD_GENRE = "ジャンル"
+    override val F5_MOD_RECENT_PURCHASE = "最近の購入"
+    override val F5_MOD_RECENT_PLAYED = "最近聴いた作品"
+    override val F5_MOD_MY_SOUND = "あとで聴く"
+    override val F5_MOD_RECAP = "プレイバック"
+    override val F5_MOD_SYNC = "購入した作品を同期"
+    override val F5_MOD_UNKNOWN = "不明なセクション"
+    override val TOAST_F5_NEED_LOGIN = "DLsiteSoundにログインしていないため、この機能は使えません。"
+
+
+    override val F4_TITLE = "アプリフォント"
+    override val F4_CARD = "フォント置換を有効化"
+    override val F4_CURRENT = "現在のフォント"
+    override val F4_NONE = "（未設定）"
+    override val F4_SYSTEM_FONTS = "システムフォント"
+    override val F4_RISK_NOTE = "If text looks wrong afterwards, restart DLsiteSound"
+    override val F4_NOTE_NOTO = "DLsiteSound ships Noto Sans JP (the same typeface family as Source Han Sans); the bundled Source Han Sans SC focuses on Simplified Chinese glyphs"
+    override val F4_MY_FONTS = "My fonts"
+    override val F4_MY_FONTS_NOTE = "Import a font file with the button below (.ttf / .otf only). Tap an item to apply it; long-press to delete."
+    override val F4_MY_FONTS_EMPTY = "No imported font files yet."
+    override val F4_DELETE_TITLE = "Delete font"
+    override val F4_DELETE_BODY = "This removes the module's copy of the font (your original file is untouched). If it is the current font, replacement turns off too."
+    override val BTN_DELETE = "Delete"
+    override val TOAST_FONT_DELETED = "Font deleted"
+    override val F4_BUNDLED = "Bundled fonts"
+    override val F4_NOOP = "That font matches the host default, so nothing will change. Pick another file or family."
+    override val F4_BUNDLED_NOTE = "Both bundled fonts are SIL OFL 1.1: commercial use is allowed, and so is redistribution together with this module (keep the copyright notice and license — see About → Bundled font licenses). DingTalk JinBuTi and Alibaba PuHuiTi grant usage only, not redistribution of the font files, so they are not bundled; import them manually if needed."
+    override val ABOUT_FONTS = "Bundled font licenses"
+    override val BTN_VIEW_OFL = "View full OFL 1.1"
+    override val F4_PREVIEW = "Preview"
+
+    override val ABOUT_TITLE = "情報"
+    override val ABOUT_SUBTITLE = "DLsiteSound experience enhancer"
+    override val ABOUT_VERSION = "Module version"
+    override val ABOUT_CODE = "Build"
+    override val ABOUT_PACKAGE = "Package"
+    override val ABOUT_HOST = "Host package"
+    override val ABOUT_HOST_VERSION = "Host version"
+    override val ABOUT_HOST_NOT_INSTALLED = "Not installed"
+    override val ABOUT_COLOR_SOURCE = "Color source"
+    override val ABOUT_COLOR_DYNAMIC = "System dynamic color"
+    override val ABOUT_COLOR_FALLBACK = "Built-in Mono fallback"
+    override val ABOUT_LICENSE = "License"
+    override val ABOUT_FEEDBACK_SUM = "Please attach the LSPosed log when reporting issues."
+    override val ABOUT_WHY_TITLE = "Why MoriMod?"
+    override val ABOUT_WHY_BODY = "I got tired of the purple background and wanted to replace the home / player background with images I actually like, so the app feels entirely mine.\n\n" +
+        "The bundled font Noto San JP often renders broken glyphs in a Simplified Chinese environment, so I wanted to swap in a font I like and adjust the subtitle size for comfortable long listening sessions.\n\n" +
+        "I wanted the interface to feel more refined.\n\n" +
+        "Texture, fluency, control - that is what drives this module.\n\n" +
+        "Finally, thank you for downloading and using it. Enjoy every audio you listen to."
+    override val ABOUT_DISCLAIMER_TITLE = "Disclaimer"
+    override val ABOUT_DISCLAIMER_BODY = "For personal study, research, testing and private use only. Do not use it for anything illegal, for infringing the rights of others, or for disrupting the platform's normal service.\n\n" +
+        "This module is AI-assisted. It is only guaranteed that no deliberate malicious input or malicious behaviour by a human was included during development; AI-generated code may not fully match the intent, so please verify before use.\n\n" +
+        "This is an independently developed third-party tool. It has no affiliation or partnership with DLsiteSound (eisys Inc.) or any phone manufacturer.\n\n" +
+        "Using this module requires Root and an Xposed framework. It may void the warranty of some devices or violate the security policy of some ROMs, and may cause instability, loss of warranty or security risks. You bear all such risks.\n\n" +
+        "Third-party modules may cause account anomalies, device instability or data loss at runtime. Back up important data first and test with non-critical accounts and scenarios.\n\n" +
+        "Continued use means you acknowledge the risks above. If you do not agree, stop using it and uninstall the module."
+    override val ABOUT_REPO_TITLE = "Project"
+    override val BTN_OPEN_REPO = "Open"
+    override val BTN_COPY_LINK = "Copy link"
+
+    override val COMMON_ENABLE = "有効化"
+    override val BTN_RESTORE = "Restore"
+    override val BTN_CLEAR = "Clear list"
+    override val BTN_EXPORT = "Export list"
+    override val BTN_PICK_IMAGE = "Choose image"
+    override val BTN_PICK_FONT = "Choose font file"
+    override val BTN_USE_SYSTEM_FONT = "Use system font"
+    override val BTN_COPY_INFO = "Copy version info"
+    override val BTN_OK = "OK"
+    override val BTN_CANCEL = "Cancel"
+
+    override val DLG_ADD_NAME = "Add names"
+    override val DLG_ADD_NAME_HINT = "One per line; batch import supported"
+    override val DLG_FIELD_TEXT = "Text"
+    override val DLG_CLEAR_TITLE = "Clear this list?"
+    override val DLG_CLEAR_TEXT = "Every entry in this list will be deleted permanently."
+    override val DLG_DELETE_TITLE = "Delete this item?"
+    override val DLG_DELETE_TEXT = "This cannot be undone."
+    override val DLG_HIDE_ICON_TITLE = "Hide launcher icon?"
+    override val DLG_HIDE_ICON_TEXT = "The launcher icon disappears and stays hidden after a reboot. To reopen this screen later: LSPosed manager → Modules → long-press this module → Launch."
+    override val DLG_BACKUP_TITLE = "エクスポートとバックアップ"
+    override val DLG_BACKUP_HINT = "Exports a single text blob. Import verifies its checksum and never overwrites a valid config on failure."
+    override val DLG_BACKUP_EXPORT = "Export"
+    override val DLG_BACKUP_IMPORT = "Import"
+    override val DLG_BACKUP_COPY_HINT = "Tap “Export” again to copy to the clipboard."
+
+    override val TOAST_SAVED = "保存しました"
+    override val TOAST_SAVE_FAILED = "Save failed, please retry"
+    override val TOAST_COPIED = "Copied to clipboard"
+    override val TOAST_PICK_FAILED = "Could not read the selected file"
+    override val TOAST_FONT_UNSUPPORTED = "Unsupported file"
+    override val TOAST_PICK_CANCELED = "Selection cancelled"
+    override val TOAST_EXPORTED = "Exported"
+    override val TOAST_EXPORT_FAILED = "Export failed"
+    override val TOAST_EXPORT_COPIED = "Config text copied to the clipboard"
+    override val TOAST_IMPORTED = "Imported"
+    override val TOAST_IMPORT_EMPTY = "No config text on the clipboard"
+    override val TOAST_IMPORT_CHECKSUM = "Checksum failed — config left untouched"
+    override val TOAST_IMPORT_FORMAT = "Wrong format — config left untouched"
+    override val TOAST_REQUIRES_HOST = "Open DLsiteSound first"
+    override val TOAST_RESERVED = "Not available yet — please wait for an update"
+    override val TAG_WIP = "Coming soon"
+    override val TAG_EXPERIMENTAL = "BETA"
+    override val TOAST_DEFAULT_RESTORED = "Restored host default"
+    override val TOAST_BG_RESTORED = "Restored host default background"
+    override val TOAST_ICON_HIDDEN = "Launcher icon hidden"
+    override val TOAST_ICON_SHOWN = "Launcher icon restored"
+    override val TOAST_ICON_HIDE_FAILED = "Could not change the launcher icon"
+    override val TOAST_DELETED = "Deleted"
+
+
+}
+
+internal object Ko : MoriStrings() {
+    override val APP_TITLE = "Mori MOD"
+    override val HOME_SUBTITLE = "DLsiteSound experience enhancer"
+    override val BACK = "뒤로"
+
+    override val STATUS_TITLE = "Status"
+    override val STATUS_PLUGIN = "Module version"
+    override val STATUS_HOST = "DLsiteSound version"
+    override val STATUS_RUNTIME = "Runtime"
+    override val STATUS_CHECKING = "Checking…"
+    override val STATUS_ACTIVE = "Running"
+    override val STATUS_INACTIVE = "Not running"
+    override val STATUS_HOST_MISSING = "Not installed"
+
+    override val SEC_FEATURES = "기능 설정"
+    override val SEC_BEAUTY = "꾸미기"
+    override val SEC_OPTIMIZE = "최적화"
+    override val SEC_MANAGE = "모듈 관리"
+
+    override val ITEM_BACKGROUND = "배경 사용자 지정"
+    override val ITEM_FONT = "글꼴 바꾸기"
+    override val ITEM_LAYOUT = "홈 레이아웃"
+    override val ITEM_COVER_BLOCK = "작품 커버 숨기기"
+    override val ITEM_COVER_BLOCK_SUM = "모든 화면에서 커버 숨김(탭은 가능)"
+    override val ITEM_PERF = "곡명/작품명 스크롤 중지"
+    override val ITEM_PERF_SUM = "실험적. 재생 화면 곡명·작품명 고정"
+    override val ITEM_HIDE_ICON = "런처 아이콘 숨기기"
+    override val ITEM_DEBUG_LOG = "디버그 로그"
+    override val ITEM_DEBUG_LOG_SUM = "기본 꺼짐. LSPosed 로그에 기록"
+    override val ITEM_BACKUP = "내보내기 및 백업"
+    override val ITEM_BACKUP_SUM = "설정 텍스트 내보내기 / 백업에서 복원"
+    override val ITEM_ABOUT = "정보"
+
+    override val F2_TITLE = "앱 배경"
+    override val F2_ENABLE = "사용"
+    override val F2_CARD = "앱 배경 바꾸기"
+    override val F2_BLUR = "배경 흐림"
+    override val F2_PLAY_BLUR = "재생 화면 배경 흐림"
+    override val F2_ACCENT = "벽지에서 강조색"
+    override val F2_ACCENT_NOTE = "Tints every non-white text and all shadow overlays in the host with an accent colour extracted from your wallpaper. Turn off to restore the host defaults."
+    override val F2_ACCENT_STYLE = "Accent style"
+    override val F2_CURRENT_NONE = "Current: host default"
+    override val F2_CURRENT = "Current background"
+    override val F2_MY_BGS = "My backgrounds"
+    override val F2_MY_BGS_NOTE = "jpg / png / webp: tap to apply, long-press to delete"
+    override val F2_MY_BGS_EMPTY = "No background imported yet."
+    override val CROP_TITLE = "Crop background"
+    override val CROP_HINT = "Pinch to zoom, drag to move. The framed area fills the app background at screen ratio."
+    override val BTN_CROP_SKIP = "Skip cropping"
+    override val BTN_CROP_USE = "Use this area"
+    override val TOAST_CROP_FAILED = "Crop failed — original image kept"
+    override val F2_DELETE_BODY = "This removes the image from your library. If it is the current app background, the background is restored to the host default as well."
+
+    override val F5_TITLE = "홈 레이아웃"
+    override val F5_ENABLE = "홈 레이아웃 조정 사용"
+    override val F5_NOTE = "로그인한 상태의 호스트 홈 화면에만 적용됩니다."
+    override val F5_MODULES = "홈 섹션"
+    override val F5_RESTORE = "기본 레이아웃으로 복원"
+    override val F5_MOVE_UP = "위로"
+    override val F5_MOVE_DOWN = "아래로"
+    override val F5_MOD_GENRE = "장르"
+    override val F5_MOD_RECENT_PURCHASE = "최근 구입"
+    override val F5_MOD_RECENT_PLAYED = "최근 들은 작품"
+    override val F5_MOD_MY_SOUND = "나중에 듣기"
+    override val F5_MOD_RECAP = "PlayBack"
+    override val F5_MOD_SYNC = "구입한 작품 동기화"
+    override val F5_MOD_UNKNOWN = "알 수 없는 섹션"
+    override val TOAST_F5_NEED_LOGIN = "DLsiteSound에 로그인되어 있지 않아 이 기능을 사용할 수 없습니다."
+
+
+    override val F4_TITLE = "앱 글꼴"
+    override val F4_CARD = "글꼴 바꾸기 사용"
+    override val F4_CURRENT = "현재 글꼴"
+    override val F4_NONE = "(설정 안 됨)"
+    override val F4_SYSTEM_FONTS = "시스템 글꼴"
+    override val F4_RISK_NOTE = "If text looks wrong afterwards, restart DLsiteSound"
+    override val F4_NOTE_NOTO = "DLsiteSound ships Noto Sans JP (the same typeface family as Source Han Sans); the bundled Source Han Sans SC focuses on Simplified Chinese glyphs"
+    override val F4_MY_FONTS = "My fonts"
+    override val F4_MY_FONTS_NOTE = "Import a font file with the button below (.ttf / .otf only). Tap an item to apply it; long-press to delete."
+    override val F4_MY_FONTS_EMPTY = "No imported font files yet."
+    override val F4_DELETE_TITLE = "Delete font"
+    override val F4_DELETE_BODY = "This removes the module's copy of the font (your original file is untouched). If it is the current font, replacement turns off too."
+    override val BTN_DELETE = "Delete"
+    override val TOAST_FONT_DELETED = "Font deleted"
+    override val F4_BUNDLED = "Bundled fonts"
+    override val F4_NOOP = "That font matches the host default, so nothing will change. Pick another file or family."
+    override val F4_BUNDLED_NOTE = "Both bundled fonts are SIL OFL 1.1: commercial use is allowed, and so is redistribution together with this module (keep the copyright notice and license — see About → Bundled font licenses). DingTalk JinBuTi and Alibaba PuHuiTi grant usage only, not redistribution of the font files, so they are not bundled; import them manually if needed."
+    override val ABOUT_FONTS = "Bundled font licenses"
+    override val BTN_VIEW_OFL = "View full OFL 1.1"
+    override val F4_PREVIEW = "Preview"
+
+    override val ABOUT_TITLE = "정보"
+    override val ABOUT_SUBTITLE = "DLsiteSound experience enhancer"
+    override val ABOUT_VERSION = "Module version"
+    override val ABOUT_CODE = "Build"
+    override val ABOUT_PACKAGE = "Package"
+    override val ABOUT_HOST = "Host package"
+    override val ABOUT_HOST_VERSION = "Host version"
+    override val ABOUT_HOST_NOT_INSTALLED = "Not installed"
+    override val ABOUT_COLOR_SOURCE = "Color source"
+    override val ABOUT_COLOR_DYNAMIC = "System dynamic color"
+    override val ABOUT_COLOR_FALLBACK = "Built-in Mono fallback"
+    override val ABOUT_LICENSE = "License"
+    override val ABOUT_FEEDBACK_SUM = "Please attach the LSPosed log when reporting issues."
+    override val ABOUT_WHY_TITLE = "Why MoriMod?"
+    override val ABOUT_WHY_BODY = "I got tired of the purple background and wanted to replace the home / player background with images I actually like, so the app feels entirely mine.\n\n" +
+        "The bundled font Noto San JP often renders broken glyphs in a Simplified Chinese environment, so I wanted to swap in a font I like and adjust the subtitle size for comfortable long listening sessions.\n\n" +
+        "I wanted the interface to feel more refined.\n\n" +
+        "Texture, fluency, control - that is what drives this module.\n\n" +
+        "Finally, thank you for downloading and using it. Enjoy every audio you listen to."
+    override val ABOUT_DISCLAIMER_TITLE = "Disclaimer"
+    override val ABOUT_DISCLAIMER_BODY = "For personal study, research, testing and private use only. Do not use it for anything illegal, for infringing the rights of others, or for disrupting the platform's normal service.\n\n" +
+        "This module is AI-assisted. It is only guaranteed that no deliberate malicious input or malicious behaviour by a human was included during development; AI-generated code may not fully match the intent, so please verify before use.\n\n" +
+        "This is an independently developed third-party tool. It has no affiliation or partnership with DLsiteSound (eisys Inc.) or any phone manufacturer.\n\n" +
+        "Using this module requires Root and an Xposed framework. It may void the warranty of some devices or violate the security policy of some ROMs, and may cause instability, loss of warranty or security risks. You bear all such risks.\n\n" +
+        "Third-party modules may cause account anomalies, device instability or data loss at runtime. Back up important data first and test with non-critical accounts and scenarios.\n\n" +
+        "Continued use means you acknowledge the risks above. If you do not agree, stop using it and uninstall the module."
+    override val ABOUT_REPO_TITLE = "Project"
+    override val BTN_OPEN_REPO = "Open"
+    override val BTN_COPY_LINK = "Copy link"
+
+    override val COMMON_ENABLE = "사용"
+    override val BTN_RESTORE = "Restore"
+    override val BTN_CLEAR = "Clear list"
+    override val BTN_EXPORT = "Export list"
+    override val BTN_PICK_IMAGE = "Choose image"
+    override val BTN_PICK_FONT = "Choose font file"
+    override val BTN_USE_SYSTEM_FONT = "Use system font"
+    override val BTN_COPY_INFO = "Copy version info"
+    override val BTN_OK = "OK"
+    override val BTN_CANCEL = "Cancel"
+
+    override val DLG_ADD_NAME = "Add names"
+    override val DLG_ADD_NAME_HINT = "One per line; batch import supported"
+    override val DLG_FIELD_TEXT = "Text"
+    override val DLG_CLEAR_TITLE = "Clear this list?"
+    override val DLG_CLEAR_TEXT = "Every entry in this list will be deleted permanently."
+    override val DLG_DELETE_TITLE = "Delete this item?"
+    override val DLG_DELETE_TEXT = "This cannot be undone."
+    override val DLG_HIDE_ICON_TITLE = "Hide launcher icon?"
+    override val DLG_HIDE_ICON_TEXT = "The launcher icon disappears and stays hidden after a reboot. To reopen this screen later: LSPosed manager → Modules → long-press this module → Launch."
+    override val DLG_BACKUP_TITLE = "내보내기 및 백업"
+    override val DLG_BACKUP_HINT = "Exports a single text blob. Import verifies its checksum and never overwrites a valid config on failure."
+    override val DLG_BACKUP_EXPORT = "Export"
+    override val DLG_BACKUP_IMPORT = "Import"
+    override val DLG_BACKUP_COPY_HINT = "Tap “Export” again to copy to the clipboard."
+
+    override val TOAST_SAVED = "저장됨"
+    override val TOAST_SAVE_FAILED = "Save failed, please retry"
+    override val TOAST_COPIED = "Copied to clipboard"
+    override val TOAST_PICK_FAILED = "Could not read the selected file"
+    override val TOAST_FONT_UNSUPPORTED = "Unsupported file"
+    override val TOAST_PICK_CANCELED = "Selection cancelled"
+    override val TOAST_EXPORTED = "Exported"
+    override val TOAST_EXPORT_FAILED = "Export failed"
+    override val TOAST_EXPORT_COPIED = "Config text copied to the clipboard"
+    override val TOAST_IMPORTED = "Imported"
+    override val TOAST_IMPORT_EMPTY = "No config text on the clipboard"
+    override val TOAST_IMPORT_CHECKSUM = "Checksum failed — config left untouched"
+    override val TOAST_IMPORT_FORMAT = "Wrong format — config left untouched"
+    override val TOAST_REQUIRES_HOST = "Open DLsiteSound first"
+    override val TOAST_RESERVED = "Not available yet — please wait for an update"
+    override val TAG_WIP = "Coming soon"
+    override val TAG_EXPERIMENTAL = "BETA"
+    override val TOAST_DEFAULT_RESTORED = "Restored host default"
+    override val TOAST_BG_RESTORED = "Restored host default background"
+    override val TOAST_ICON_HIDDEN = "Launcher icon hidden"
+    override val TOAST_ICON_SHOWN = "Launcher icon restored"
+    override val TOAST_ICON_HIDE_FAILED = "Could not change the launcher icon"
+    override val TOAST_DELETED = "Deleted"
+
+
+}
+
 /**
  * 当前语言表格。
  *
@@ -708,6 +1120,8 @@ internal object Strings {
             Lang.ZH_CN -> ZhCn
             Lang.ZH_TW -> ZhTw
             Lang.EN -> En
+            Lang.JA -> Ja
+            Lang.KO -> Ko
         }
     }
 }

@@ -78,12 +78,15 @@ public final class Heartbeat {
         Context ctx = sCtx;
         if (ctx == null) return;
         try {
+            // 顺手扫一下登录壳，供设置页闸 F5
+            FeatureF5.probeLoginShell();
             Intent i = new Intent(Protocol.ACTION_HOST_ALIVE);
             i.setPackage(io.github.ariinyume.morimod.util.BuildInfo.applicationId());
             i.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
             i.putExtra(Protocol.EXTRA_ALIVE_TS, System.currentTimeMillis());
             i.putExtra(Protocol.EXTRA_BUILD,
                     io.github.ariinyume.morimod.util.BuildInfo.versionCode());
+            i.putExtra(Protocol.EXTRA_HOST_LOGGED_IN, FeatureF5.isLoggedIn());
             ctx.sendBroadcast(i);
             if (!"tick".equals(why)) {
                 XposedCompat.log(TAG + " beat sent (" + why + ")");

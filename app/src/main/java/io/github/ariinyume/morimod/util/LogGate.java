@@ -18,10 +18,6 @@ public final class LogGate {
     private LogGate() {
     }
 
-    public static boolean enabled() {
-        return RemoteConfig.debugLog();
-    }
-
     public static void debug(String tag, String msg) {
         if (!RemoteConfig.debugLog()) return;
         XposedCompat.log(tag + " " + msg);

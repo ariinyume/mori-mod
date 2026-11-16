@@ -227,8 +227,8 @@ def main():
 
     ok("action 前缀编进包", has("io.github.ariinyume.morimod.action."))
     ok("宿主包名编进包", has("jp.co.eisys.dlsitesound"))
-    ok("宿主 Metadata 类名编进包", has("expo.modules.audio.Metadata"))
-    ok("背景资源白名单编进包", has("main_visual"))
+    # v0.1.146：背景资源锚点（FeatureF2.BG_PAGE_MARKERS）；旧 Metadata 钩子已不在本版。
+    ok("背景资源白名单编进包", has("main_visual") and has("activityBackground"))
     # v0.0.9 常量层：配置主动索取 action + 宿主本地副本文件名 + 系统字体目录
     ok("配置主动索取 action 编进包", has("io.github.ariinyume.morimod.action.CONFIG_REQ"))
     # v0.1.1：素材通道的两个 action + 宿主侧缓存目录名。任一条被折叠/改写，
@@ -293,7 +293,11 @@ def main():
     ok("内置字体②文件名编进包", has("fonts/smiley_sans.otf"))
 
     # ---- E. 禁止项 ----
-    ok("无参考项目包名残留", not has("io.github.ariinyume.dlsitesoundfloat"))
+    # foreignModuleView 故意保留「识别 Float 模块」的前缀字面量（带尾点）；
+    # 剥掉后再查，避免把避让名单误判成包名残留。
+    _blob_no_foreign = blob.replace(b"io.github.ariinyume.dlsitesoundfloat.", b"")
+    ok("无参考项目包名残留",
+       b"io.github.ariinyume.dlsitesoundfloat" not in _blob_no_foreign)
     ok("无 DLsiteFloat 横幅残留", not has("DLsiteFloat"))
 
     zf.close()

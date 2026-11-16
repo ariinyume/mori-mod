@@ -100,6 +100,11 @@ public final class Protocol {
     public static final String EXTRA_ASSET_DATA = "asset_data";
     /** 心跳时间戳（宿主侧 System.currentTimeMillis()）。 */
     public static final String EXTRA_ALIVE_TS = "alive_ts";
+    /**
+     * 宿主是否处于登录壳（见过主底栏 tab-home 等）。
+     * 缺省 / 未探测到时视为 false；设置页据此闸 F5。
+     */
+    public static final String EXTRA_HOST_LOGGED_IN = "host_logged_in";
 
     /** EXTRA_TAG 取值：宿主。 */
     public static final String TAG_HOST = "host";

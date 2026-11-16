@@ -11,6 +11,7 @@ import io.github.ariinyume.morimod.hook.AssetSync;
 import io.github.ariinyume.morimod.hook.Heartbeat;
 import io.github.ariinyume.morimod.hook.FeatureF2;
 import io.github.ariinyume.morimod.hook.FeatureF4;
+import io.github.ariinyume.morimod.hook.FeatureF5;
 import io.github.ariinyume.morimod.hook.TrackSwitchRelief;
 import io.github.ariinyume.morimod.util.AppEnv;
 import io.github.ariinyume.morimod.util.BuildInfo;
@@ -181,6 +182,9 @@ public class MoriModModule extends XposedModule {
         // F1（系统播放控件自定义）已搁置并移除：宿主自带该能力，不再挂 hook。
         installSafely("F4", () -> FeatureF4.install(cl));
         installSafely("F2", () -> FeatureF2.install(cl));
+        // ★ F5：主页区块显隐/排序（路线 2 视图树；PV-1 否定远端模块清单）。
+        //   关 f5Enabled 时不改布局；开着才挂 addView/setVisibility 重放。
+        installSafely("F5", () -> FeatureF5.install(cl));
         // ★ v0.1.99：切歌卡顿优化（实验性）总开关的落点。
         //   v0.1.105：开关打开后，播放页曲名和作品名两条跑马灯保持不动。
         //   开关关着时 setTranslationX 上没有 hook。

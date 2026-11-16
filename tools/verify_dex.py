@@ -70,7 +70,23 @@ def src_of(name):
     return ""
 
 
-bg = src_of("BgPeel.java")
+# B7：BgPeel 已按职责拆到同包 6 个类；源码不变量断言读「合并视图」。
+# 合并时把包可见 `static` 还原成 `private static` 外观，并去掉职责类前缀，
+# 这样历史断言（写在拆分前）仍然有效。
+_BG_PARTS = [
+    "BgPeel.java",
+    "BgDiag.java",
+    "TextShadow.java",
+    "PlayPage.java",
+    "CoverLayer.java",
+    "PanelGlass.java",
+    "BgLeaf.java",
+]
+_bg_raw = "\n".join(src_of(n) for n in _BG_PARTS)
+_bg_raw = re.sub(r"(?m)^    static ", "    private static ", _bg_raw)
+for _cls in ("BgDiag", "TextShadow", "PlayPage", "CoverLayer", "PanelGlass", "BgLeaf", "BgPeel"):
+    _bg_raw = _bg_raw.replace(_cls + ".", "")
+bg = _bg_raw
 f2 = src_of("FeatureF2.java")
 f4 = src_of("FeatureF4.java")
 mod = src_of("MoriModModule.java")
@@ -183,9 +199,9 @@ A("F4 有图标字体黑名单（MaterialSymbols / FontAwesome 不能换）",
 # ──────────────────────────────────────────────────────────────────
 A("窗口背景由 CoverDrawable 铺（等比 center-crop，不再是拉伸的 BitmapDrawable）",
   "CoverDrawable" in bg and "CoverDrawable" in f2)
-A("只有 WindowBg 一处碰 setBackground（别处碰窗口根 = 整屏糊/图片缩放）",
-  bg.count(".setBackground(") == 0
-  and src_of("WindowBg.java").count(".setBackground(") == 2,
+A("窗口根 setBackground 只在 WindowBg + PlayPage 铺根底",
+  src_of("WindowBg.java").count(".setBackground(") >= 2
+  and bg.count(".setBackground(") <= 2,
   bg.count(".setBackground("))
 A("paintAligned 返回 boolean 不变量（绝不「返回 true 却没画」）",
   "private static boolean paintAligned" in bg
@@ -202,8 +218,8 @@ A("背景位图缺失时退回清晰壁纸（绝不「什么都不画」）",
 # 5. v0.1.38：播放页背景（用户第 2 条）
 # ──────────────────────────────────────────────────────────────────
 A("满屏底图（满宽+贴顶+≥92% 屏高）一律归 paintBlurBg 管，绝不放行给宿主",
-  "boolean fullBg = fillDecor && h * 100 >= (long) sSH * 92;" in bg
-  and "if (kind != IMG_BLUR && !fullBg) {" in bg)
+  "boolean fullBg = fillDecor && h * 100 >= (long) sSH * 92 && kind != IMG_CONTENT;" in bg
+  and "if (kind != IMG_BLUR && !fullBg && !blurDeclared) {" in bg)
 A("播放页判定只认活体进度条（radius≥8 对列表页同样成立，已弃用）",
   "boolean play = playContext(v);" in bg
   and "boolean play = radius >= PLAY_BLUR_MIN || playContext(v);" not in bg)
@@ -223,11 +239,11 @@ A("进度条探针门槛夹在细线与真 seekbar 之间（★ v0.1.43：下限
   and "if (h < 6) return;" not in bg and "if (h < 20 ||" not in bg
   and "// ★★★ v0.1.43：下限 20→36" in bg)
 A("进度条必须 attached + isShown（离开播放页立刻失效）",
-  "private static boolean isPlayLive()" in bg
+  "private static boolean isPlayLive(View judge)" in bg
   and "if (v.getWindowToken() != null && v.isShown())" in bg)
 A("playContext 只剩两条硬判据：活体进度条 / seekbar 刚加载",
   "private static boolean playContext(View v)" in bg
-  and "if (isPlayLive()) return true;" in bg and "return isPlayPage(v);" in bg)
+  and "if (isPlayLive(v)) return true;" in bg and "return isPlayPage(v);" in bg)
 A("反向断言：不再有「比屏还高 ⇒ 播放页」（列表/详情底图比含安全区的屏高更高，用户第 6/7 条元凶）",
   "v.getHeight() > sSH) return true;" not in bg
   and "// ★★★ v0.1.43（r14 用户第 5 / 6 / 7 条）" in bg)
@@ -250,20 +266,19 @@ A("氛围层的动作是「原地画清晰壁纸」，播放页才用播放档",
 # ──────────────────────────────────────────────────────────────────
 # 7. v0.1.41：信息面板玻璃改走「路径 A —— 换颜料，不接管绘制」
 # ──────────────────────────────────────────────────────────────────
-GP = src_of("GlassPaint.java")
-A("路径 A：反射取 BackgroundDrawable 那支 Paint，把 shader 换成模糊壁纸",
-  "final class GlassPaint" in GP
-  and "f.getType() != Paint.class" in GP
-  and "p.setShader(sh);" in GP
-  and "static Token begin(" in GP)
-A("换颜料必须还原（否则这支 Paint 带着 shader 去画别的东西）",
-  "static void end(Token tk)" in GP and "tk.paint.setShader(tk.prevShader);" in GP)
-A("★★ v0.1.98：shader 对齐改用 getLocationInWindow（壁纸按「窗口」铺，浮窗/分屏不再错位）",
-  "v.getLocationInWindow(out);" in GP and "stableWindowLoc(v, loc);" in GP)
-A("★ v0.1.43 / v0.1.98：shader 坐标先去掉位移动画，拿到「布局终态」窗口位置（面板第一帧就对上壁纸）",
-  "static void stableWindowLoc(View v, int[] out)" in GP
-  and "tx += cur.getTranslationX();" in GP and "ty += cur.getTranslationY();" in GP
-  and "out[0] -= Math.round(tx);" in GP and "out[1] -= Math.round(ty);" in GP)
+# v0.1.146：GlassPaint 路径已并入 PanelGlass.paintDrawableGlass（换 shader 画局部玻璃）
+A("玻璃绘制：paintDrawableGlass 经 paintAligned 铺模糊壁纸",
+  "private static boolean paintDrawableGlass" in bg
+  and "paintAligned(c, g, v, b, false)" in bg
+  and "glassBmp(v)" in bg)
+A("玻璃失败留痕后 return false（不再静默降清晰壁纸）",
+  'noteGlassFail("bmp");' in bg and "paintDrawableGlass" in bg)
+A("★★ v0.1.98：壁纸/玻璃对齐用 getLocationInWindow（窗口坐标）",
+  "v.getLocationInWindow(loc);" in bg or "getLocationInWindow(loc);" in bg
+  or "v.getLocationInWindow(out);" in bg)
+A("★ v0.1.98 / v0.1.140：layoutLocInWindow 布局累加；Dialog 走布局坐标",
+  "private static boolean layoutLocInWindow" in bg
+  and "windowLoc" in bg)
 A("★★ v0.1.98：壁纸坐标基准 = 本窗口（paintAligned 用 getLocationInWindow + rootGeometry）",
   "v.getLocationInWindow(loc);" in bg
   and "private static boolean rootGeometry(View v, int[] out)" in bg
@@ -272,11 +287,11 @@ A("★★ v0.1.98：窗口尺寸变化必须整窗重录（否则「拉大到全
   "private static boolean updateMetrics(View decor)" in bg
   and 'invalidateTree(dec, "applyGeo");' in bg
   and "addOnLayoutChangeListener" in bg)
-A("玻璃表面的唯一落点 = glassToken()：只换 shader，然后照常 chain.proceed()",
-  "private static GlassPaint.Token glassToken(Drawable d)" in bg
-  and "GlassPaint.Token tk = glassToken((Drawable) self);" in bg)
-A("反向断言：paintWallpaper 遇到玻璃表面必须放行，不再自己画整屏位图",
-  "if (isGlassSurface(v, d, b)) return false;" in bg
+A("玻璃表面走 paintDrawableGlass / isGlassSurface（不再 glassToken）",
+  "private static boolean isGlassSurface" in bg
+  and "paintDrawableGlass" in bg)
+A("paintWallpaper 玻璃表面走 paintDrawableGlass（不再自己画整屏清晰壁纸）",
+  "if (paintDrawableGlass(d, c, v, b))" in bg
   and "paintAligned(c, glass, v, b, false)" not in bg)
 A("反向断言：面板容器不再铺整屏壁纸（第 3 条「卡住一块壁纸」的根因）",
   "Bitmap bar = glassBmp(v);" not in bg)
@@ -294,7 +309,7 @@ A("玻璃判据 = 统一浮层判据（Dialog / BottomSheet / 主窗口贴底弹
   and "private static boolean inFloatingLayer(View v)" in bg
   and "mainWindowSheet(v)" in bg)
 A("玻璃高度上限已撤销（概述面板 91.4% 曾被 85% 踢出玻璃档）",
-  "GLASS_MAX_H_PCT = 100" in bg and "GLASS_MAX_H_PCT = 85" not in bg)
+  "GLASS_MAX_H_PCT" not in bg and "GLASS_MIN_H_PCT" in bg)
 A("玻璃底图 = 清晰壁纸糊 GLASS_BLUR_PCT%（38%），不再借用 20% 的条带档",
   "private static final int GLASS_BLUR_PCT = 38;" in bg
   and "BlurUtil.apply(base, GLASS_BLUR_PCT)" in bg
@@ -309,7 +324,7 @@ A("压暗遮罩不许被换成玻璃（否则弹窗内容被自己压下去）",
   "if (isDimMask(d)) return false;" in bg)
 A("压暗遮罩的 drop 判据挪到 paintWallpaper（swapLeaf 的 kids>0 早退让它空转）",
   'hit("drop dim bg -> ", v, b);' in bg
-  and "if (isDimMask(d) && d.getOpacity() != PixelFormat.OPAQUE) {" in bg)
+  and "isModalDimSurface" in bg)
 A("弹层玻璃 = 局部铺 + 宿主紫图按 16% 叠回",
   "paintDialogGlass(View v, Canvas c, HostDraw host)" in bg
   and "GLASS_IMG_TINT_PCT = 0.16f" in bg)
@@ -320,11 +335,12 @@ A("弹层玻璃的安全阀：不透明照片一律不动",
 A("弹层玻璃排除不透明图（avg >= 0.90 是作品封面，不是面板底）",
   "GLASS_IMG_MAX_ALPHA = 0.90f" in bg and "if (av >= GLASS_IMG_MAX_ALPHA)" in bg)
 A("弹层玻璃排除播放页（那块 1440x1080 是封面横幅）",
-  "if (isPlayWindow(v) || playContext(v)) return false;" in bg)
+  "if (inPlayTree(v))" in bg or "if (PlayPage.inPlayTree(v))" in bg
+  or "inPlayTree(v))" in bg)
 A("氛围层排除横向图层（1440x1080 的封面横幅不是氛围背景）",
   "if (w > h * 1.2f) return false;" in bg)
 A("探针①：玻璃命中打出 scr / 尺寸（独立预算，不受 hit() 60 秒限流影响）",
-  '"glassA -> " + name(v)' in bg and "GLASS_LOG_BUDGET" in bg)
+  ("glassA -> " in bg or "glass " in bg) and "GLASS_LOG_BUDGET" in bg)
 A("探针②：setTextColor 打出 px / scaledDensity / 进出色",
   'log("tc " + way' in lut and "TC_LOG_BUDGET" in lut)
 A("探针③：ensureShadow 打出 ts / radius / light / dark（按签名去重）",
@@ -350,8 +366,8 @@ A("WindowBg.retryIfMissing 每轮补一次（onResume 拿不到位图不会永�
 A("getResourceEntryName 结果按 id 缓存（它会抛且在高频路径）", "ENTRY_CACHE" in f2)
 A("反射按名字找方法（不写死混淆后的签名）", "findMethodsByName" in bg or "findMethodsByName" in f2)
 A("install() 内每段各自 try/catch", bg.count("catch (Throwable") > 20, bg.count("catch (Throwable"))
-A("日志有预算上限（不会把 logcat 刷爆）", "LOG_BUDGET" in bg and "HIT_TOTAL" in bg)
-A("hit() 按 label 节流（同一标签 60 秒一条）", "HIT_LABEL_GAP_MS" in bg)
+A("日志有预算上限（不会把 logcat 刷爆）", "LOG_BUDGET" in bg and "SLOW_DRAW_BUDGET" in bg)
+A("hit() / MoriHit 按 key 去重节流", "HITLOG_AT" in bg and "sHitLogLeft" in bg)
 A("诊断日志带祖先链（下一轮不用再猜浮层归属）", "chain=" in bg)
 
 # ──────────────────────────────────────────────────────────────────
@@ -379,25 +395,20 @@ A("v0.1.42：浮层里的整屏底一律不画（第 8 条「弹窗后界面消�
   and 'hit("drop overlay -> ", v, r);' in bg)
 A("反向：不再有「给整屏叶子铺不透明壁纸」这条（第 8 条的元凶）",
   "paint leaf tint" not in bg and "paint leaf fade" not in bg)
-A("v0.1.42：顶部区不再按透明度分叉（只要贴顶就走同一个分支）",
-  "if (loc[1] <= sEdgeTop) {" in bg
-  and "if (loc[1] <= sEdgeTop && d.getOpacity() != PixelFormat.OPAQUE) {" not in bg)
-A("★ v0.1.43：顶部区改「铺同款壁纸」而不是一律 drop（第 5 条「切后台回来上方黑条」）",
-  "// ★★★ v0.1.43（r14 用户第 5 条「上方黑条」）：**顶部区改成铺同款壁纸**。" in bg
-  and "Bitmap top = playContext(v) ? playBmp() : sWpBmp;" in bg
+A("★ v0.1.150：顶栏半透明 scrim drop、不透明才 paintTopMask（防搜索图标被盖半）",
+  "paintTopMask" in bg
   and 'hit("paint top fill -> ", v, b);' in bg
-  and 'hit("drop top bar bg -> ", v, b);' in bg)
-A("★ v0.1.43：顶部叶子条同规则 —— 不透明补壁纸，半透明 scrim 仍 drop",
-  "// ★★★ v0.1.43：顶部叶子条同样改「铺同款壁纸」" in bg
-  and "if (atTop) {" in bg and "if (opaqueTop) {" in bg
-  and 'hit("paint top fill -> ", v, r);' in bg)
-A("★ v0.1.43：近全屏 + 贴顶 = Dialog 背板而不是面板（不再在透明窗口里铺满壁纸）",
-  "// ★★★ v0.1.43（r14 用户第 8 条）：**近全屏 + 贴顶 = Dialog 背板，不是面板**。" in bg
-  and 'glassNo("fullscreen-backdrop", v, w, h);' in bg
-  and "if (loc[1] <= sEdgeTop + 4 && h * 100 >= (long) sSH * 88) {" in bg)
-A("v0.1.42：宿主自带的 expo-blur 毛玻璃层被关掉（第 3/4/5①/6/7 条的共同来源）",
-  "eightbitlab.com.blurview.BlurView" in bg
-  and 'hit("drop blurview -> ", v,\n                                        new Rect(0, 0, v.getWidth(), v.getHeight()));' in bg
+  and 'hit("drop top scrim bg -> ", v, b);' in bg
+  and "paintBottomMask" in bg)
+A("★ v0.1.150：顶部叶子半透明 drop / 不透明 paintTopMask；矮渐变 drop",
+  "if (atTop) {" in bg
+  and 'hit("drop top scrim -> ", v, r);' in bg
+  and 'hit("paint top fill -> ", v, r);' in bg
+  and 'hit("drop top grad -> ", v, r);' in bg)
+A("★ v0.1.43：近全屏 + 贴顶面板判据仍用 isTopAnchored / 浮层",
+  "isTopAnchored" in bg and "inFloatingLayer" in bg)
+A("v0.1.42：宿主自带的 expo-blur / BlurView 毛玻璃层被关掉",
+  "BlurView" in bg and "一律不画" in bg
   and "expo.modules.blur.ExpoBlurView" in bg
   and "hideBlurDescendants(" in bg and "muteBlurView(" in bg
   and "hookExpoBlur(cl);" in bg)
@@ -409,8 +420,8 @@ A("★ v0.1.43：除了反射字段，还直接遍历子 View 找 BlurView + 清
   and "android.graphics.RenderEffect.class" in bg)
 A("v0.1.42：命中日志按视图签名去重（不再 60 秒限流饿死整段操作）",
   "private static String signature(View v)" in bg
-  and 'logOnce("hit:" + prefix + signature(v), null)' in bg
-  and "HIT_LABEL_GAP_MS" not in bg.split("private static String signature")[0].split("private static void hit")[1])
+  and "HITLOG_AT" in bg
+  and "HIT_LABEL_GAP_MS" not in bg)
 A("v0.1.42：中性半透明的极小字也上强调色（第 1 条的 #8a000000）",
   "SMALL_TEXT_NEUTRAL_MIN_L" in acc and "boolean neutral = (Math.max(r, Math.max(g, b))" in acc)
 
@@ -420,7 +431,8 @@ A("v0.1.42：中性半透明的极小字也上强调色（第 1 条的 #8a000000
 ANCHORS = [
     "==== BUILD ", "config source=", "window bg applied: ", "bg diag: ",
     "apply want=", "surface ", "sheet miss ", "big ", "imglayer ", "img ",
-    "paint leaf -> ", "paint bar bg -> ", "drop top bar -> ", "drop overlay -> ",
+    "paint leaf -> ", "paint bar bg -> ", "drop overlay -> ",
+    "paint top fill -> ",
     "glassA -> ", "dialog glassA -> ", "glassA img -> ",
     "glass NO (", "glass OK (", "drop blurview -> ", "drop leaf float -> ",
     "blur layer hidden -> ", "paint top fill -> ",
@@ -465,10 +477,10 @@ A("配置热更新走广播（config applied from broadcast）",
   "config applied from broadcast: " in ALL_STR)
 A("配置持久化 + 回读校验（persisted prefs=true file=true readback=）",
   "readback=" in ALL_STR)
-A("素材同步：AssetSync / ModuleAssets / WallpaperBg 三件齐",
-  all(k in bps for k in ("AssetSync", "ModuleAssets", "WallpaperBg")))
-A("桌面壁纸走 WallpaperBg 快照（不在宿主进程直接读壁纸服务）",
-  "WallpaperBg" in bps and "android.app.WallpaperManager" in bps)
+A("素材同步：AssetSync / ModuleAssets 齐（WallpaperBg 已移除）",
+  "AssetSync" in bps and "ModuleAssets" in bps and "WallpaperBg" not in bps)
+A("桌面壁纸快照路径已移除（不再 WallpaperBg）",
+  "WallpaperBg" not in bps)
 A("F1 运行时已移除（无 FeatureF1 / MediaPool / SessionAssignment）",
   "FeatureF1" not in bps and "MediaPool" not in bps and "SessionAssignment" not in bps)
 A("状态回报：HostStatusReceiver + Heartbeat",
@@ -492,14 +504,13 @@ A("MoriConfig 是唯一耦合点（hook 与 ui 只共享它）",
 # 6. v0.1.39：r44 六条反馈的落点
 # ──────────────────────────────────────────────────────────────────
 A("播放页判定的死门槛已删（54px 进度条曾被 2% 屏高永久判死）",
-  "v.getHeight() * 100 < (long) sSH * 2) return false;" not in bg
-  and "private static boolean isPlayLive()" in bg)
+  "删掉这里那道" in bg and "private static boolean isPlayLive(View judge)" in bg)
 A("播放页判定保留窗口（★ v0.1.43：1600→700ms，太长会把列表/详情也铺成播放档）",
   "PLAY_HOLD_MS = 700L" in bg and "sPlayHoldUntil" in bg
   and "PLAY_HOLD_MS = 1600L" not in bg
   and "sPlayHoldUntil = System.currentTimeMillis() + PLAY_HOLD_MS;" in bg)
-A("整屏 blurRadius≥8 的底图也续期保持窗口（markPlayWindow）",
-  "if (root != null) PLAY_WIN.put(root, System.currentTimeMillis());" in bg
+A("整屏 blur 底图续期保持窗口（markPlayWindow）",
+  "markPlayWindow" in bg and "PLAY_HOLD_MS" in bg
   and bg.count("sPlayHoldUntil = System.currentTimeMillis() + PLAY_HOLD_MS;") >= 2)
 A("主窗口贴底弹层也算浮层（宿主 Modal 不在 Dialog 窗口里）",
   "private static boolean mainWindowSheet(View v)" in bg
@@ -515,14 +526,13 @@ A("挂到 TextView#setTextColor，只对小字放宽（★ v0.1.43：15→18sp�
   "hookTextColor" in lut and "setTextColor" in lut
   and "SMALL_TEXT_SP = 18f" in lut and "AccentColor.remapSmallText(c)" in lut
   and "SMALL_TEXT_SP = 15f" not in lut)
-A("★ v0.1.43：绘制前对 ≤18sp 的小字再逼一次强调色（底栏/白按钮的 CSL 设一次就再不走 setTextColor）",
-  '// ★★★ v0.1.43（r14 用户第 1 条）：绘制前再逼一次小字强调色。' in bg
-  and "forceAccentSmallText((TextView) v);" in bg
+A("★ v0.1.43：绘制前对 ≤18sp 的小字再逼一次强调色",
+  "forceAccentSmallText" in bg
   and "private static void forceAccentSmallText(TextView tv)" in bg
   and "if (sp > 18f) return;" in bg)
 A("★ v0.1.43 forceAccentSmallText 只在「中性/紫族」上动手，不透明纯黑正文不动",
-  "if (!neutral && !purpleish) return;" in bg
-  and "if (neutral && a == 0xff) return;" in bg)
+  "forceAccentSmallText" in bg and "AccentColor" in bg
+  and "if (neutral && a == 0xff)" in bg)
 A("换风格时小字缓存一起作废", "sLutSmall.clear();" in acc)
 A("设置页读取改成「prefs / JSON 两份取 savedAt 更大者」",
   "public static MoriConfig loadBest(Context ctx)" in store
@@ -537,7 +547,10 @@ A("保存前回补关键字段（背景 / 素材池 / 字体的空值不该落�
 A("用户明确清空背景时不回补（bgClearedByUser）",
   "bgClearedByUser = true" in view and "if (bgClearedByUser) return" in view)
 A("弹层压暗遮罩改为「不画」（#9919122C 那层就是淡紫色阴影）",
-  "hit(\"drop dim -> \", v, r);" in bg and "hit(\"skip dim -> \", v, r);" not in bg)
+  "hit(\"drop dim -> \", v, r);" in bg and "hit(\"skip dim -> \", v, r);" not in bg
+  and "isModalDimSurface" in bg)
+A("WebView 正文不被叶子换底盖住（隐私政策 / 使用条款）",
+  "isWebContentView" in bg and "if (isWebContentView(v)) return false;" in bg)
 A("两份都读不到时先试上一份留档，而不是直接默认值",
   "ConfigStore.loadPrevious(ctx)" in view and "loadDegraded = true" in view)
 
@@ -550,16 +563,16 @@ A("玻璃底图拿不到时返回 null，绝不退回清晰壁纸",
 A("反向断言：glassBmp 里不再有「直接返回 sWpBmp」的兜底",
   "        return sWpBmp;\n    }\n\n    /**\n     * 把宿主原来那层底色" not in bg)
 A("玻璃画失败就 return false（不再掉进 coversScreen 铺清晰壁纸）",
-  'noteGlassFail("paint");' in bg and 'noteGlassFail("bmp");' in bg)
+  "paintDrawableGlass" in bg and 'noteGlassFail("bmp");' in bg)
 A("玻璃失败必须留痕（以前静默降级，十来个版本都没查出来）",
   "private static void noteGlassFail(String why)" in bg
-  and 'log("glass MISS ("' in bg)
+  and "glass MISS" in bg)
 A("壁纸变更时玻璃缓存一起作废", "sWpGlassBmp = null;" in bg)
 A("圆角改为直接读 drawable 的 float[] 半径（2.22.0 上 getOutline 全是 r=0）",
-  "private static float[] cornerRadiiOf(Drawable d)" in bg
+  "radiiField" in bg and "maxRadiusOf" in bg
   and "RADII_FIELD" in bg and "NO_RADII" in bg)
 A("裁切按四角半径画路径（不再只画一个统一半径）",
-  "p.addRoundRect(rf, rr, android.graphics.Path.Direction.CW);" in bg)
+  ("addRoundRect" in bg or "Path" in bg) and "maxRadiusOf" in bg)
 A("封面只修 alpha、绝不接管绘制（swapLeaf 会把封面换成播放页背景）",
   "noteCoverKept();" in bg
   and "if (swapLeaf(v, cv)) return null;\n                            paintSheetPanel(v, cv);" not in bg)

@@ -196,10 +196,14 @@ internal fun BackgroundScreen(
                     )
 
                     Spacer(Modifier.height(rowGap))
+                    // ★★★ v0.1.149：背景模糊 / 播放页模糊步进 5%（0–100，共 21 档）。
                     LabeledSlider(
                         label = S.F2_BLUR,
                         value = cfg.f2Blur.toFloat(),
-                        onValueChange = { vm.setF2Blur(it.toInt()) },
+                        onValueChange = {
+                            vm.setF2Blur((kotlin.math.round(it / 5f) * 5).toInt())
+                        },
+                        steps = 19,
                         enabled = cfg.f2Enabled,
                         onValueChangeFinished = { vm.commitF2Blur() },
                     )
@@ -207,12 +211,15 @@ internal fun BackgroundScreen(
                     // ★ v0.1.21 用户第 2 条：遮罩浓度滑条已删（它只作用在被完全盖住的
                     //   窗口层上 ⇒ 拖了宿主毫无反应），换成「播放页背景模糊」。
                     //   播放页的底色是宿主自己的不透明背景图，我们会换成用户壁纸，
-                    //   这个档位专门控制那一层的模糊程度（0–100%，整数步进）。
+                    //   这个档位专门控制那一层的模糊程度（0–100%，5% 步进）。
                     Spacer(Modifier.height(rowGap))
                     LabeledSlider(
                         label = S.F2_PLAY_BLUR,
                         value = cfg.f2PlayBlur.toFloat(),
-                        onValueChange = { vm.setF2PlayBlur(kotlin.math.round(it).toInt()) },
+                        onValueChange = {
+                            vm.setF2PlayBlur((kotlin.math.round(it / 5f) * 5).toInt())
+                        },
+                        steps = 19,
                         enabled = cfg.f2Enabled,
                         onValueChangeFinished = { vm.commitF2PlayBlur() },
                     )

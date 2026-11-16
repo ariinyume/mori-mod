@@ -200,8 +200,8 @@ internal fun HomeScreen(
                         icon = Icons.AutoMirrored.Rounded.ReceiptLong,
                         title = S.ITEM_LAYOUT,
                         shape = shape,
-                        onClick = { vm.notify(S.TOAST_RESERVED) },
-                        trailing = { WipTag() },
+                        onClick = { onNavigate(Dest.LAYOUT) },
+                        showChevron = true,
                     )
                 }
             }
@@ -411,36 +411,6 @@ private fun StatusCard(
 
 /** 状态小图标的直径（用户要求「只需要小图标」）。 */
 private val StatusGlyphSize = 28.dp
-
-/**
- * 「待开发」小标签。
- *
- * ⚠️ 主页布局仍是待开发；原注释：主页布局这两项目前只有一条 Snackbar 反馈，
- *    用户点完看页面没跳转，很容易判断成「点了没反应 / 功能坏了」。
- *    把状态**常驻**在行尾，用户点之前就知道它是待开发，点击后仍给一条 toast 兜底。
- */
-@Composable
-private fun WipTag() {
-    PillTag(S.TAG_WIP)
-}
-
-/** 行尾小胶囊标签（「待开发」/「实验性」共用一套样式）。 */
-@Composable
-private fun PillTag(text: String) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(percent = 50))
-            .background(MaterialTheme.colorScheme.secondaryContainer)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            maxLines = 1,
-        )
-    }
-}
 
 /**
  * 「导出与备份」行。

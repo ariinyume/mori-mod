@@ -42,12 +42,12 @@ public final class FeatureF2 {
 
     private static final String TAG = "[MoriMod:F2]";
 
-    /** v1.0 开放页面的资源项名特征（contains 匹配，自动覆盖 assets_ 前缀与 _tablet 变体）。 */
-    private static final String[] OPEN_PAGES = {
+    /**
+     * 背景相关资源名锚点（编进包供核验 / 诊断）。
+     * <p>历史上 OPEN_PAGES 用过；isOpenPage 已删，字面量仍须留在 dex 常量池。
+     */
+    public static final String[] BG_PAGE_MARKERS = {
             "main_visual",
-            // ★★★ v0.1.5 真凶：**`activityBackground` 才是用户看到的"主程序背景"**
-            //   （`color/activityBackground = #ff1c1b3d`，style 的 android:windowBackground
-            //   指向它）。之前只认 main_visual ⇒ 从来没命中过 ⇒ 背景"永远不生效"。
             "activityBackground",
     };
 
@@ -317,15 +317,6 @@ public final class FeatureF2 {
     private static final int PROBE_MAX = 160;
     private static volatile int sProbeCount;
 
-    /** 资源 id 是否是 F2 关心的那几张（只用于诊断摘要，不影响任何行为）。 */
-    private static boolean isOpenPage(String entry) {
-        if (entry == null) return false;
-        for (String p : OPEN_PAGES) {
-            if (entry.contains(p)) return true;
-        }
-        return false;
-    }
-
     /**
      * 给 {@link WindowBg} / {@link BgPeel} 用：窗口/内容层背景 Drawable。
      *
@@ -535,7 +526,22 @@ public final class FeatureF2 {
         return b;
     }
 
+    /**
+     * 壁纸相关字段指纹。coverBlock / 字体 / 调试开关等变化时指纹不变，
+     * 绝不能把位图缓存清掉 —— 否则开关「作品封面屏蔽」会连带闪断 / 关掉背景替换
+     * （v0.1.152 / 用户反馈）。
+     */
+    private static volatile String sWpFinger = "";
+
     private static void invalidate() {
+        MoriConfig cfg = RemoteConfig.get();
+        String finger = wpFinger(cfg);
+        if (finger.equals(sWpFinger)) {
+            // 壁纸素材没变：只让 BgPeel/WindowBg 的 sDirty 路径重绘（封面屏蔽等），
+            // 位图继续用。
+            return;
+        }
+        sWpFinger = finger;
         sCachedBmp = null;
         sCachedBmpKey = "";
         sDrawable = null;
@@ -546,5 +552,16 @@ public final class FeatureF2 {
         sPlayKey = "";
         sBmpOk = false;
         sDegradeLogged = false;
+    }
+
+    private static String wpFinger(MoriConfig cfg) {
+        if (cfg == null) return "null";
+        return (cfg.f2Enabled ? "1" : "0")
+                + "|" + (cfg.f2HomeBg == null ? "" : cfg.f2HomeBg)
+                + "|b" + cfg.f2Blur
+                + "|p" + cfg.f2PlayBlur
+                + "|m" + cfg.f2MaskAlpha
+                + "|a" + (cfg.f2Accent ? "1" : "0")
+                + "|" + (cfg.f2AccentStyle == null ? "" : cfg.f2AccentStyle);
     }
 }

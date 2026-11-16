@@ -165,6 +165,8 @@ fun ThickSlider(
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..100f,
+    /** 两端之间的离散档位数；0 = 连续。5% 步进 ⇒ (100-0)/5 - 1 = 19。 */
+    steps: Int = 0,
     enabled: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
 ) {
@@ -172,6 +174,7 @@ fun ThickSlider(
         value = value,
         onValueChange = onValueChange,
         valueRange = valueRange,
+        steps = steps,
         onValueChangeFinished = onValueChangeFinished,
         enabled = enabled,
         modifier = modifier.fillMaxWidth(),
@@ -193,6 +196,7 @@ fun LabeledSlider(
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..100f,
     valueText: String = "${value.toInt()}%",
+    steps: Int = 0,
     enabled: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
 ) {
@@ -220,6 +224,7 @@ fun LabeledSlider(
             value = value,
             onValueChange = onValueChange,
             valueRange = valueRange,
+            steps = steps,
             enabled = enabled,
             onValueChangeFinished = onValueChangeFinished,
         )

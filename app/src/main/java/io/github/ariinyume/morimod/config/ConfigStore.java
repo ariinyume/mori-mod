@@ -49,7 +49,13 @@ public final class ConfigStore {
     public static boolean savePrefs(Context ctx, MoriConfig cfg) {
         if (cfg == null) return false;
         cfg.clamp();
-        return XPrefs.putString(ctx, XPrefs.HOOK, XPrefs.K_CONFIG_JSON, cfg.toJson());
+        return savePrefs(ctx, cfg.toJson());
+    }
+
+    /** 已序列化好的 JSON 直接落 prefs（避免同一轮 persist 重复 toJson）。 */
+    public static boolean savePrefs(Context ctx, String json) {
+        if (ctx == null || json == null) return false;
+        return XPrefs.putString(ctx, XPrefs.HOOK, XPrefs.K_CONFIG_JSON, json);
     }
 
     public static MoriConfig loadPrefs(Context ctx) {
@@ -76,6 +82,13 @@ public final class ConfigStore {
     /** 原子写 JSON 文件（临时文件 → rename），避免被杀进程导致半截配置（FR-0.3 规则 2）。 */
     public static boolean saveFile(Context ctx, MoriConfig cfg) {
         if (ctx == null || cfg == null) return false;
+        cfg.clamp();
+        return saveFile(ctx, cfg.toJson());
+    }
+
+    /** 已序列化好的 JSON 原子落盘（避免同一轮 persist 重复 toJson）。 */
+    public static boolean saveFile(Context ctx, String json) {
+        if (ctx == null || json == null) return false;
         try {
             java.io.File dir = ctx.getFilesDir();
             if (dir == null) return false;
@@ -84,7 +97,7 @@ public final class ConfigStore {
             keepPrevious(dir, dst);
             java.io.File tmp = new java.io.File(dir, FILE_NAME + ".tmp");
             try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp)) {
-                fos.write(cfg.toJson().getBytes("UTF-8"));
+                fos.write(json.getBytes("UTF-8"));
                 fos.flush();
                 fos.getFD().sync();
             }

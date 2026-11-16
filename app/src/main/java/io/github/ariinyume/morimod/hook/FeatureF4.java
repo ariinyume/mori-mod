@@ -1,6 +1,5 @@
 package io.github.ariinyume.morimod.hook;
 
-import android.content.res.AssetManager;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 

@@ -73,6 +73,23 @@ internal object S {
 
     // ── F3 ─────────────────────────────────────────────────────────
 
+    // ── F5 ─────────────────────────────────────────────────────────
+    val F5_TITLE get() = s.F5_TITLE
+    val F5_ENABLE get() = s.F5_ENABLE
+    val F5_NOTE get() = s.F5_NOTE
+    val F5_MODULES get() = s.F5_MODULES
+    val F5_RESTORE get() = s.F5_RESTORE
+    val F5_MOVE_UP get() = s.F5_MOVE_UP
+    val F5_MOVE_DOWN get() = s.F5_MOVE_DOWN
+    val F5_MOD_GENRE get() = s.F5_MOD_GENRE
+    val F5_MOD_RECENT_PURCHASE get() = s.F5_MOD_RECENT_PURCHASE
+    val F5_MOD_RECENT_PLAYED get() = s.F5_MOD_RECENT_PLAYED
+    val F5_MOD_MY_SOUND get() = s.F5_MOD_MY_SOUND
+    val F5_MOD_RECAP get() = s.F5_MOD_RECAP
+    val F5_MOD_SYNC get() = s.F5_MOD_SYNC
+    val F5_MOD_UNKNOWN get() = s.F5_MOD_UNKNOWN
+    val TOAST_F5_NEED_LOGIN get() = s.TOAST_F5_NEED_LOGIN
+
     // ── F4 ─────────────────────────────────────────────────────────
     val F4_TITLE get() = s.F4_TITLE
     val F4_CARD get() = s.F4_CARD

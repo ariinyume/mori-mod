@@ -98,12 +98,6 @@ public final class DiagLog {
         return sb.toString();
     }
 
-    /** 是否有任一靶点被触发过（= 已生效的最低证据）。 */
-    public static synchronized boolean anyTriggered() {
-        for (Integer v : sTriggers.values()) if (v != null && v > 0) return true;
-        return false;
-    }
-
     /** 完整转储（供设置页「复制日志」）。 */
     public static synchronized String dump() {
         StringBuilder sb = new StringBuilder();
@@ -137,10 +131,4 @@ public final class DiagLog {
         event("diag", "cleared");
     }
 
-    /** 曲目身份脱敏：只记哈希前 8 位，不记名称（NFR-SEC3）。 */
-    public static String anonymize(String s) {
-        if (s == null) return "null";
-        int h = s.hashCode();
-        return "h" + Integer.toHexString(h) + "/len" + s.length();
-    }
 }

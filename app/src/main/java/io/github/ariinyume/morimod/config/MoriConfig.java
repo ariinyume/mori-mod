@@ -184,8 +184,34 @@ public final class MoriConfig {
      */
     public final List<String> f4FontLib = new ArrayList<>();
 
-    // ── F5 主页布局（第二批 v1.1）───────────────────────────────────
+    // ── F5 主页布局（路线 2：视图树显隐 / 排序；PV-1 = 非远端清单）──
     public boolean f5Enabled = false;
+    /**
+     * 主页区块条目（按 {@link F5Entry#order} 升序 = 从上到下）。
+     * <p>空列表在 {@link #clamp()} 里会补齐默认目录；未知 id 保留兼容。
+     */
+    public final List<F5Entry> f5Modules = new ArrayList<>();
+
+    /**
+     * F5 默认区块 id（登录态主页；无 home-hero）。
+     * 顺序与宿主常见从上到下一致。
+     */
+    public static final String[] F5_DEFAULT_IDS = {
+            "recent_played",
+            "genre",
+            "recent_purchase",
+            "recap",
+            "my_sound",
+            "sync",
+    };
+
+    /** 主页一个区块的显隐与排序。 */
+    public static final class F5Entry {
+        public String id = "";
+        public boolean visible = true;
+        /** 越小越靠上；clamp 后会重排为 0..n-1。 */
+        public int order = 0;
+    }
 
     // ── 性能实验：切换音轨卡顿优化（v0.1.99）─────────────────────────
     /**
@@ -271,6 +297,14 @@ public final class MoriConfig {
         c.f4FontLib.clear();
         c.f4FontLib.addAll(f4FontLib);
         c.f5Enabled = f5Enabled;
+        c.f5Modules.clear();
+        for (F5Entry e : f5Modules) {
+            F5Entry n = new F5Entry();
+            n.id = e.id;
+            n.visible = e.visible;
+            n.order = e.order;
+            c.f5Modules.add(n);
+        }
         c.perfSwitch = perfSwitch;
         c.lang = lang; c.hideLauncherIcon = hideLauncherIcon;
         c.debugLog = debugLog;
@@ -299,8 +333,10 @@ public final class MoriConfig {
         f2MaskAlpha = 0;
         if (f2Blur < 0) f2Blur = 0;
         if (f2Blur > 100) f2Blur = 100;
+        f2Blur = ((f2Blur + 2) / 5) * 5;   // v0.1.149：5% 步进
         if (f2PlayBlur < 0) f2PlayBlur = 0;
         if (f2PlayBlur > 100) f2PlayBlur = 100;
+        f2PlayBlur = ((f2PlayBlur + 2) / 5) * 5;
         if (!validAccentStyle(f2AccentStyle)) {
             f2AccentStyle = "TonalSpot";
         }
@@ -324,11 +360,66 @@ public final class MoriConfig {
         }
         if (lang == null || lang.isEmpty()) lang = "zh-CN";
         if (profiles.isEmpty()) profiles.add("default");
+        ensureF5Defaults();
         // ── F1 已移除运行时：旧备份里的开关一律钉死，避免误开。
         f1Enabled = false;
         f1Cover = true;
         f1Title = false;
         f1Artist = false;
+    }
+
+    /**
+     * 补齐默认 F5 区块、去掉空 id、按 order 重排并压成 0..n-1。
+     * <p>用户改过的 visible/order 保留；新版本新增的默认 id 追加在末尾。
+     */
+    public void ensureF5Defaults() {
+        java.util.LinkedHashMap<String, F5Entry> map = new java.util.LinkedHashMap<>();
+        for (F5Entry e : f5Modules) {
+            if (e == null || e.id == null || e.id.isEmpty()) continue;
+            // 登录态首页没有 home-hero；旧配置里的 hero 丢掉
+            if ("hero".equals(e.id)) continue;
+            if (map.containsKey(e.id)) continue;
+            F5Entry n = new F5Entry();
+            n.id = e.id;
+            n.visible = e.visible;
+            n.order = e.order;
+            map.put(e.id, n);
+        }
+        for (int i = 0; i < F5_DEFAULT_IDS.length; i++) {
+            String id = F5_DEFAULT_IDS[i];
+            if (!map.containsKey(id)) {
+                F5Entry n = new F5Entry();
+                n.id = id;
+                n.visible = true;
+                n.order = 1000 + i; // 新 id 落在已有项后面
+                map.put(id, n);
+            }
+        }
+        // 只保留目录内 id（避免旧未知项占位）
+        java.util.HashSet<String> allow = new java.util.HashSet<>();
+        for (String id : F5_DEFAULT_IDS) allow.add(id);
+        java.util.Iterator<String> it = map.keySet().iterator();
+        while (it.hasNext()) {
+            if (!allow.contains(it.next())) it.remove();
+        }
+        List<F5Entry> list = new ArrayList<>(map.values());
+        list.sort((a, b) -> {
+            int c = Integer.compare(a.order, b.order);
+            if (c != 0) return c;
+            return a.id.compareTo(b.id);
+        });
+        for (int i = 0; i < list.size(); i++) list.get(i).order = i;
+        f5Modules.clear();
+        f5Modules.addAll(list);
+    }
+
+    /** 按 id 找 F5 条目；没有则 null。 */
+    public F5Entry findF5(String id) {
+        if (id == null || id.isEmpty()) return null;
+        for (F5Entry e : f5Modules) {
+            if (id.equals(e.id)) return e;
+        }
+        return null;
     }
 
     // ── JSON ────────────────────────────────────────────────────────
@@ -359,6 +450,15 @@ public final class MoriConfig {
             for (String p : f4FontLib) lib.put(p);
             o.put("f4FontLib", lib);
             o.put("f5Enabled", f5Enabled);
+            JSONArray f5 = new JSONArray();
+            for (F5Entry e : f5Modules) {
+                JSONObject j = new JSONObject();
+                j.put("id", e.id);
+                j.put("visible", e.visible);
+                j.put("order", e.order);
+                f5.put(j);
+            }
+            o.put("f5Modules", f5);
             o.put("perfSwitch", perfSwitch);
             o.put("lang", lang);
             o.put("hideLauncherIcon", hideLauncherIcon);
@@ -422,6 +522,18 @@ public final class MoriConfig {
                 }
             }
             c.f5Enabled = o.optBoolean("f5Enabled", false);
+            JSONArray f5 = o.optJSONArray("f5Modules");
+            if (f5 != null) {
+                for (int i = 0; i < f5.length(); i++) {
+                    JSONObject j = f5.optJSONObject(i);
+                    if (j == null) continue;
+                    F5Entry e = new F5Entry();
+                    e.id = j.optString("id", "");
+                    e.visible = j.optBoolean("visible", true);
+                    e.order = j.optInt("order", i);
+                    if (!e.id.isEmpty()) c.f5Modules.add(e);
+                }
+            }
             c.perfSwitch = o.optBoolean("perfSwitch", false);
             c.lang = o.optString("lang", "zh-CN");
             c.hideLauncherIcon = o.optBoolean("hideLauncherIcon", false);
@@ -485,6 +597,7 @@ public final class MoriConfig {
                 + ",pageA=" + f2PageAlpha + ")"
                 + " F4=" + f4Enabled + "(fam=" + (f4FontFamily.isEmpty() ? "-" : f4FontFamily)
                 + ",file=" + (f4FontFile.isEmpty() ? "none" : "set") + ")"
+                + " F5=" + f5Enabled + "(mods=" + f5Modules.size() + ")"
                 + " lang=" + lang + " hideIcon=" + hideLauncherIcon
                 + " perf=" + perfSwitch
                 + " media=" + mediaPool.size() + " names=" + namePool.size();

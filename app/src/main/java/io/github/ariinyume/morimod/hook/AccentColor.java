@@ -282,11 +282,6 @@ public final class AccentColor {
         return sOn;
     }
 
-    /** 强调色的色相（度），诊断用。 */
-    public static double hue() {
-        return sSeedH;
-    }
-
     /** 当前风格名，诊断用。 */
     public static String styleName() {
         int i = sStyle;

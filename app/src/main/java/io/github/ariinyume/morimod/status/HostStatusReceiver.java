@@ -35,6 +35,9 @@ public final class HostStatusReceiver extends BroadcastReceiver {
     /** 最后一次心跳里带的模块版本号（设置页可用来提示「宿主里跑的是旧版本」）。 */
     public static final String K_BUILD = "host_build_code";
 
+    /** 宿主登录壳：1 = 已登录，0 = 未登录 / 访客。 */
+    public static final String K_LOGGED_IN = "host_logged_in";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (context == null || intent == null) return;
@@ -49,6 +52,8 @@ public final class HostStatusReceiver extends BroadcastReceiver {
             XPrefs.putLong(app, PREFS, K_LAST_ALIVE, ts);
             int build = intent.getIntExtra(Protocol.EXTRA_BUILD, 0);
             if (build > 0) XPrefs.putLong(app, PREFS, K_BUILD, build);
+            boolean loggedIn = intent.getBooleanExtra(Protocol.EXTRA_HOST_LOGGED_IN, false);
+            XPrefs.putLong(app, PREFS, K_LOGGED_IN, loggedIn ? 1L : 0L);
         } catch (Throwable ignored) {
             // 绝不抛回系统
         }

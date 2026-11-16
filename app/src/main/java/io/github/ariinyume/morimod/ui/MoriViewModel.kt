@@ -13,11 +13,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import io.github.ariinyume.morimod.config.ConfigBus
 import io.github.ariinyume.morimod.config.ConfigStore
 import io.github.ariinyume.morimod.config.MoriConfig
 import io.github.ariinyume.morimod.status.HostStatusReceiver
 import io.github.ariinyume.morimod.util.XPrefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 设置页状态中枢。
@@ -182,10 +186,11 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 用户明确清空（{@link #bgClearedByUser}）时一律不补。
      */
     private fun restoreCritical() {
+        // ★ v0.1.146：配置正常读到过 ⇒ 整段跳过（绝大多数用户每次开关都不必读盘）。
+        //   旧早退要求「壁纸+素材池+字体」三者都非空，只设了壁纸的用户永远不满足，
+        //   于是每点一次开关都读一遍 prev.json。
+        if (!loadDegraded) return
         if (bgClearedByUser) return
-        // 三个关键字段都还在 ⇒ 完全不用读留档（这条路是每次保存都会走的，能省就省）
-        if (config.f2HomeBg.isNotEmpty() && config.mediaPool.isNotEmpty()
-            && config.f4FontLib.isNotEmpty()) return
         var prev: MoriConfig? = null
         try {
             prev = ConfigStore.loadPrevious(getApplication())
@@ -235,6 +240,38 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 主页 / 二级页各有一份 ViewModel：二级页落盘后主页内存可能仍是旧快照。
+     * 回前台或任何写操作前对齐磁盘，避免语言/封面开关把 F5、壁纸、模糊、字体、调色写回旧值。
+     */
+    fun reloadFromStore() {
+        adoptDiskIfNewer(force = true)
+    }
+
+    /**
+     * 若磁盘 savedAt 更新，用磁盘覆盖内存。
+     * @param force 回前台时即使 savedAt 相同也再读（吃掉其它 VM 刚写完的同戳竞态）。
+     */
+    private fun adoptDiskIfNewer(force: Boolean = false) {
+        val ctx = getApplication<Application>()
+        val disk = try {
+            ConfigStore.loadBest(ctx)
+        } catch (t: Throwable) {
+            null
+        } ?: return
+        if (disk.savedAt < config.savedAt) return
+        if (!force && disk.savedAt == config.savedAt) return
+        val prevLang = config.lang
+        val keepCleared = bgClearedByUser
+        config = disk
+        config.clamp()
+        bgClearedByUser = keepCleared
+        loadDegraded = false
+        if (config.lang != prevLang) {
+            Strings.apply(Lang.of(config.lang))
+        }
+    }
+
+    /**
      * 落盘并广播。
      *
      * @return 是否成功（失败时 toast 已给出提示）。
@@ -250,20 +287,23 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         // ★ v0.1.4：打上保存时间戳。宿主进程能读到 4 份配置（模块 remote prefs / 模块 JSON /
         //   宿主本地 JSON / 宿主本地 prefs），读取时**取 savedAt 最大的一份**，
         //   这样「先在设置页改字体 → 再开宿主」也能拿到最新那份，不再靠猜哪条通道可靠。
+        config.clamp()
         config.savedAt = System.currentTimeMillis()
-        val okPrefs = ConfigStore.savePrefs(ctx, config)
-        val okFile = ConfigStore.saveFile(ctx, config)
-        // 即使本地写失败也广播，宿主那次仍可能生效；但要如实回报失败。
-        ConfigBus.sendConfigChanged(ctx, config.toJson())
-        // ⚠️ 换成深拷贝：让所有读 vm.config 的作用域（含 LazyColumn 的每一项）真正失效，
-        //    否则就地改字段在 Compose 里是「隐身」的（见 config 字段注释）。
+        // ★ v0.1.146：只序列化一次；fsync / 写文件丢 IO 线程，避免设置页连点掉帧。
+        val json = config.toJson()
+        // ⚠️ copy 必须仍在主线程、起协程之前：Compose 靠换身份刷新 LazyColumn。
         config = config.copy()
-        // 落盘成功了 ⇒ 这次读到的内容就是可信的，降级标志解除
         loadDegraded = false
         bgClearedByUser = false
-        if (!okPrefs || !okFile) {
-            toast = S.TOAST_SAVE_FAILED
-            return false
+        viewModelScope.launch {
+            val (okPrefs, okFile) = withContext(Dispatchers.IO) {
+                ConfigStore.savePrefs(ctx, json) to ConfigStore.saveFile(ctx, json)
+            }
+            // 即使本地写失败也广播，宿主那次仍可能生效；但要如实回报失败。
+            ConfigBus.sendConfigChanged(ctx, json)
+            if (!okPrefs || !okFile) {
+                toast = S.TOAST_SAVE_FAILED
+            }
         }
         return true
     }
@@ -275,8 +315,9 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 界面偏好 ────────────────────────────────────────────────────
 
-    /** 切换语言（简中 → 繁中 → EN 循环），立刻落盘并生效。 */
+    /** 切换语言（简中 → 繁中 → EN → 日本語 → 한국어），立刻落盘并生效。 */
     fun cycleLanguage() {
+        adoptDiskIfNewer()
         val next = Lang.of(config.lang).next()
         config.lang = next.code
         Strings.apply(next)
@@ -292,12 +333,14 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      */
     /** ★ r112：作品封面屏蔽开关。 */
     fun setCoverBlock(v: Boolean) {
+        adoptDiskIfNewer()
         config.coverBlock = v
         config.clamp()
         if (persist()) toast = S.TOAST_SAVED
     }
 
     fun setDebugLog(v: Boolean) {
+        adoptDiskIfNewer()
         config.debugLog = v
         persist()
     }
@@ -310,9 +353,115 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 这条线上的改动一律只读这一个开关，不再各自开新旋钮。
      */
     fun setPerfSwitch(v: Boolean) {
+        adoptDiskIfNewer()
         config.perfSwitch = v
         config.clamp()
         if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** 打开布局页时补齐默认区块目录（不落盘，只保证 UI 有列表）。 */
+    fun ensureF5Catalog() {
+        adoptDiskIfNewer()
+        val before = config.f5Modules.size
+        config.ensureF5Defaults()
+        if (config.f5Modules.size != before || before == 0) touch()
+    }
+
+    /** 宿主是否登录壳（心跳上报；未探测到当未登录）。 */
+    var hostLoggedIn: Boolean by mutableStateOf(false)
+        private set
+
+    /** F5 总开关：关 = 宿主主页保持原样；开 = 按区块显隐/顺序改布局。 */
+    fun setF5Enabled(v: Boolean) {
+        adoptDiskIfNewer()
+        if (v) {
+            // 仅在「宿主活着且明确访客」时拦截；宿主没开时允许先打开配置
+            val alive = hostLastSeenWall > 0L
+                    && (System.currentTimeMillis() - hostLastSeenWall) < HOST_ALIVE_WINDOW_MS
+            if (alive && !hostLoggedIn) {
+                toast = S.TOAST_F5_NEED_LOGIN
+                return
+            }
+        }
+        config.f5Enabled = v
+        config.ensureF5Defaults()
+        // 关闭时下方列表恢复默认顺序（显隐偏好保留，便于再打开）
+        if (!v) restoreDefaultF5Order()
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** 按 [MoriConfig.F5_DEFAULT_IDS] 重排，保留各 id 的 visible。 */
+    private fun restoreDefaultF5Order() {
+        config.ensureF5Defaults()
+        val byId = LinkedHashMap<String, MoriConfig.F5Entry>()
+        for (e in config.f5Modules) {
+            if (e.id.isNotEmpty()) byId[e.id] = e
+        }
+        val rebuilt = ArrayList<MoriConfig.F5Entry>(MoriConfig.F5_DEFAULT_IDS.size)
+        for (i in MoriConfig.F5_DEFAULT_IDS.indices) {
+            val id = MoriConfig.F5_DEFAULT_IDS[i]
+            val e = byId.remove(id) ?: MoriConfig.F5Entry().also {
+                it.id = id
+                it.visible = true
+            }
+            e.order = i
+            rebuilt.add(e)
+        }
+        for (e in byId.values) {
+            e.order = rebuilt.size
+            rebuilt.add(e)
+        }
+        config.f5Modules.clear()
+        config.f5Modules.addAll(rebuilt)
+    }
+
+    fun setF5Visible(id: String, visible: Boolean) {
+        adoptDiskIfNewer()
+        config.ensureF5Defaults()
+        val e = config.findF5(id) ?: return
+        e.visible = visible
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** delta = -1 上移 / +1 下移。 */
+    fun moveF5(id: String, delta: Int) {
+        adoptDiskIfNewer()
+        config.ensureF5Defaults()
+        val list = config.f5Modules
+        val i = list.indexOfFirst { it.id == id }
+        if (i < 0) return
+        val j = i + delta
+        if (j < 0 || j >= list.size) return
+        java.util.Collections.swap(list, i, j)
+        for (k in list.indices) list[k].order = k
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** 长按拖动换位（to 会夹到合法下标）。 */
+    fun reorderF5(from: Int, to: Int) {
+        adoptDiskIfNewer()
+        config.ensureF5Defaults()
+        val list = config.f5Modules
+        if (from !in list.indices) return
+        val dest = to.coerceIn(0, list.lastIndex)
+        if (from == dest) return
+        val item = list.removeAt(from)
+        list.add(dest, item)
+        for (k in list.indices) list[k].order = k
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    fun resetF5Layout() {
+        adoptDiskIfNewer()
+        config.f5Modules.clear()
+        config.ensureF5Defaults()
+        for (e in config.f5Modules) e.visible = true
+        config.clamp()
+        if (persist()) toast = S.TOAST_DEFAULT_RESTORED
     }
 
     /**
@@ -322,6 +471,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 状态写在 PackageManager 中，**重启后依然保持**。
      */
     fun setHideLauncherIcon(hide: Boolean): Boolean {
+        adoptDiskIfNewer()
         config.hideLauncherIcon = hide
         val ok = syncLauncherIcon(persist = true)
         toast = when {
@@ -352,6 +502,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
     // ── F2 背景 ─────────────────────────────────────────────────────
 
     fun setF2Enabled(v: Boolean) {
+        adoptDiskIfNewer()
         config.f2Enabled = v
         config.clamp()
         if (persist()) toast = S.TOAST_SAVED
@@ -367,11 +518,14 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * <p>拖动过程中不落盘（避免每秒一次广播），松手由 [commitF2PlayBlur] 提交。
      */
     fun setF2PlayBlur(v: Int) {
-        config.f2PlayBlur = v.coerceIn(0, 100)
+        // 5% 步进落盘，避免滑条吸附后仍写成 1% 碎值
+        val snapped = ((v.coerceIn(0, 100) + 2) / 5) * 5
+        config.f2PlayBlur = snapped.coerceIn(0, 100)
         touch()
     }
 
     fun commitF2PlayBlur() {
+        // 不 adopt：拖动中的模糊值只在内存，对齐磁盘会冲掉松手前的档位
         if (persist()) toast = S.TOAST_SAVED
     }
 
@@ -382,6 +536,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 关掉时宿主侧立刻清空，视觉上完全回到默认。
      */
     fun setF2Accent(v: Boolean) {
+        adoptDiskIfNewer()
         config.f2Accent = v
         config.clamp()
         if (persist()) toast = S.TOAST_SAVED
@@ -389,6 +544,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 强调色风格（九个名字直接沿用 Material 3 Expressive，不做翻译）。 */
     fun setF2AccentStyle(name: String) {
+        adoptDiskIfNewer()
         if (!MoriConfig.validAccentStyle(name)) return
         if (config.f2AccentStyle == name) return
         config.f2AccentStyle = name
@@ -403,11 +559,13 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 拖动过程中不落盘，松手由 [commitF2Blur] 提交。
      */
     fun setF2Blur(v: Int) {
-        config.f2Blur = v.coerceIn(0, 100)
+        val snapped = ((v.coerceIn(0, 100) + 2) / 5) * 5
+        config.f2Blur = snapped.coerceIn(0, 100)
         touch()
     }
 
     fun commitF2Blur() {
+        // 不 adopt：拖动中的模糊值只在内存，对齐磁盘会冲掉松手前的档位
         if (persist()) toast = S.TOAST_SAVED
     }
 
@@ -425,6 +583,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setF2Background(path: String) {
+        adoptDiskIfNewer()
         config.f2HomeBg = path
         // 历史字段「全透明」一律清掉：它的实现是清空宿主背景，真机表现为整屏发白
         config.f2Transparent = false
@@ -498,12 +657,14 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
     // ── F4 字体 ─────────────────────────────────────────────────────
 
     fun setF4Enabled(v: Boolean) {
+        adoptDiskIfNewer()
         config.f4Enabled = v
         config.clamp()
         if (persist()) toast = S.TOAST_SAVED
     }
 
     fun setF4Family(family: String) {
+        adoptDiskIfNewer()
         config.f4FontFamily = family
         // 选定字体即启用（与背景同一条产品逻辑：选完必须要看到变化）
         if (family.isNotEmpty()) config.f4Enabled = true
@@ -511,6 +672,7 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setF4File(path: String) {
+        adoptDiskIfNewer()
         config.f4FontFile = path
         if (path.isNotEmpty()) {
             config.f4Enabled = true
@@ -668,16 +830,32 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 就直接落「未运行」，不会永远停在「检测中」。
      */
     fun tickHostStatus() {
+        val app = getApplication<Application>()
+        val beat = XPrefs.getLong(app, HostStatusReceiver.PREFS,
+            HostStatusReceiver.K_LAST_ALIVE, 0L)
+        if (beat > hostLastSeenWall) hostLastSeenWall = beat
+        val hostAliveRecently = hostLastSeenWall > 0L
+                && (System.currentTimeMillis() - hostLastSeenWall) < HOST_ALIVE_WINDOW_MS
+        // 登录壳：心跳带上来；仅在「宿主活着且明确未登录」时强制关 F5
+        val logged = XPrefs.getLong(app, HostStatusReceiver.PREFS,
+            HostStatusReceiver.K_LOGGED_IN, 0L) == 1L
+        hostLoggedIn = logged
+        if (hostAliveRecently && !logged && config.f5Enabled) {
+            // 先对齐磁盘，避免用主页旧快照把二级页刚存的壁纸/F5 一起写坏
+            adoptDiskIfNewer()
+            if (config.f5Enabled) {
+                config.f5Enabled = false
+                restoreDefaultF5Order()
+                config.clamp()
+                persist()
+            }
+        }
         // LSPosed 作用域里有宿主 ⇒ 正常运行。不再因为心跳过期写成未运行。
         val scoped = LspScope.granted
         if (scoped != null) {
             hostScopeAlive = scoped
             return
         }
-        val app = getApplication<Application>()
-        val beat = XPrefs.getLong(app, HostStatusReceiver.PREFS,
-            HostStatusReceiver.K_LAST_ALIVE, 0L)
-        if (beat > hostLastSeenWall) hostLastSeenWall = beat
         // 服务还没回来时，曾经注入成功也先显示正常运行（授权过才会有心跳）。
         if (hostLastSeenWall > 0L) {
             hostScopeAlive = true

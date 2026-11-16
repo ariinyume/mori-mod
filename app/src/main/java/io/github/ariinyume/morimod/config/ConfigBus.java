@@ -111,16 +111,6 @@ public final class ConfigBus {
                             io.github.ariinyume.morimod.hook.Heartbeat.beat("ping");
                             break;
                         }
-                        case Protocol.ACTION_DIAG_REQ: {
-                            Intent resp = new Intent(Protocol.ACTION_DIAG_RESP);
-                            resp.putExtra(Protocol.EXTRA_DIAG_TEXT, DiagLog.dump());
-                            sendToSettings(appCtx, resp);
-                            break;
-                        }
-                        case Protocol.ACTION_DIAG_CLEAR: {
-                            DiagLog.clear();
-                            break;
-                        }
                         default:
                             break;
                     }
@@ -133,8 +123,6 @@ public final class ConfigBus {
         IntentFilter f = new IntentFilter();
         f.addAction(Protocol.ACTION_CONFIG_CHANGED);
         f.addAction(Protocol.ACTION_HOST_PING);
-        f.addAction(Protocol.ACTION_DIAG_REQ);
-        f.addAction(Protocol.ACTION_DIAG_CLEAR);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 appCtx.registerReceiver(r, f, Context.RECEIVER_EXPORTED);
@@ -267,14 +255,6 @@ public final class ConfigBus {
         sendToHost(ctx, new Intent(Protocol.ACTION_HOST_PING));
     }
 
-    public static void sendDiagReq(Context ctx) {
-        sendToHost(ctx, new Intent(Protocol.ACTION_DIAG_REQ));
-    }
-
-    public static void sendDiagClear(Context ctx) {
-        sendToHost(ctx, new Intent(Protocol.ACTION_DIAG_CLEAR));
-    }
-
     private static void sendToHost(Context ctx, Intent i) {
         if (ctx == null) return;
         try {
@@ -289,8 +269,4 @@ public final class ConfigBus {
         }
     }
 
-    /** 版本号（供探测端比对）。 */
-    public static int buildCode() {
-        return io.github.ariinyume.morimod.util.BuildInfo.versionCode();
-    }
 }

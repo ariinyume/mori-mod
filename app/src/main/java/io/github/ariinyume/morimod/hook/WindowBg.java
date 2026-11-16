@@ -48,6 +48,29 @@ public final class WindowBg {
     /** 「想要位图但这轮没拿到」的日志条数（限次，别刷屏）。 */
     private static int sMissLogs;
 
+    /**
+     * ★★★ v0.1.151：宿主 {@code expo.modules.video.FullscreenPlayerActivity} 是否在前台。
+     * <p>该窗用 SurfaceView 打洞出画面；DecorView 一旦钉上不透明 CoverDrawable，
+     * 洞就被壁纸盖死 —— 用户只看到自定义背景、看不到视频（关壁纸立即恢复）。
+     */
+    private static volatile boolean sVideoFs;
+
+    /** 横屏视频全屏播放中（BgPeel / TextureView 热路径据此整窗放行）。 */
+    public static boolean videoFullscreen() {
+        return sVideoFs;
+    }
+
+    static boolean isVideoPlayerActivity(Activity a) {
+        if (a == null) return false;
+        try {
+            String n = a.getClass().getName();
+            return n != null && (n.contains("FullscreenPlayer")
+                    || n.contains("expo.modules.video"));
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 这个 DecorView 是不是我们铺过的那个。 */
     private static boolean decorIsMine(View decor) {
         synchronized (ORIG_DECOR) {
@@ -93,6 +116,14 @@ public final class WindowBg {
                                 if (self instanceof Activity) {
                                     Activity a = (Activity) self;
                                     SEEN.put(a, Boolean.TRUE);
+                                    // ★★★ v0.1.151：视频全屏窗不钉壁纸、不跑 BgPeel 调度。
+                                    if (isVideoPlayerActivity(a)) {
+                                        sVideoFs = true;
+                                        XposedCompat.log(TAG
+                                                + " video fullscreen onResume — skip wallpaper");
+                                        return;
+                                    }
+                                    sVideoFs = false;
                                     // ★★★ v0.1.46：回到前台先重置播放页/封面救援状态，
                                     //   否则「迷你条状态下退后台→回前台→再展开播放页」
                                     //   那一帧封面 alpha 仍卡在 0、底图也不重画
@@ -137,7 +168,13 @@ public final class WindowBg {
                         protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
                             try {
                                 Object self = chain.getThisObject();
-                                if (self instanceof Activity) BgPeel.onPause((Activity) self);
+                                if (self instanceof Activity) {
+                                    Activity a = (Activity) self;
+                                    if (isVideoPlayerActivity(a)) {
+                                        sVideoFs = false;
+                                    }
+                                    BgPeel.onPause(a);
+                                }
                             } catch (Throwable ignored) {
                             }
                         }
@@ -181,6 +218,10 @@ public final class WindowBg {
                                 if (!(self instanceof Activity)) return;
                                 Activity a = (Activity) self;
                                 SEEN.put(a, Boolean.TRUE);
+                                if (isVideoPlayerActivity(a)) {
+                                    sVideoFs = true;
+                                    return;
+                                }
                                 apply(a);
                                 hookSplashExit(a);
                             } catch (Throwable ignored) {
@@ -546,12 +587,6 @@ public final class WindowBg {
     }
 
     /**
-     * ⛔ v0.1.17：**不再碰任何系统栏 API**（v0.1.15/16 那套「拆导航栏对比度 scrim」
-     * 整段删除，理由见 {@link #apply} 里的说明）。
-     */
-    private static final boolean BARS_UNTOUCHED = true;
-
-    /**
      * 位图到手了、但窗口层还没铺上：补铺一次（v0.1.14）。
      *
      * <h3>为什么必须有这个</h3>
@@ -624,11 +659,6 @@ public final class WindowBg {
         return !sAppliedKey.isEmpty();
     }
 
-    /** 清掉「已应用」状态（恢复默认时用，避免旧指纹挡住新配置）。 */
-    public static void reset() {
-        sAppliedKey = "";
-    }
-
     /** 「apply 进来了但没铺上」的诊断条数（限 4 条/进程，足够定位分支又不刷屏）。 */
     private static volatile int sSkipLogs;
 
@@ -650,6 +680,11 @@ public final class WindowBg {
 
     private static void applyInner(Activity a) {
         if (a == null) return;
+        // ★★★ v0.1.151：视频全屏窗 DecorView 保持透明打洞，绝不能钉 CoverDrawable。
+        if (isVideoPlayerActivity(a)) {
+            sVideoFs = true;
+            return;
+        }
         MoriConfig cfg = RemoteConfig.get();
         View decor = null;
         try {
