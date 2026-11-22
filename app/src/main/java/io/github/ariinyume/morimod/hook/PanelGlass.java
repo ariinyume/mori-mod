@@ -115,22 +115,26 @@ final class PanelGlass {
 
 
     /**
-     * 玻璃表面该用哪张底图（F2：壁纸 + {@link #BgPeel.GLASS_BLUR_PCT}% 单次模糊）。
+     * 玻璃表面底图（v0.2.11）。
+     * <p>概述 / 下载 / 菜单 / PurePlay 导入 / 创建播放列表等浮层，与迷你条、导航底栏
+     * 共用「信息控件背景模糊」{@link MoriConfig#f2ChromeBlur}（即 {@link BgPeel#sWpBarBmp}）。
+     * 不再使用写死的 {@link BgPeel#GLASS_BLUR_PCT}，否则滑条调了面板无感。
      */
     static Bitmap glassBmp(View v) {
-        Bitmap cached = BgPeel.sWpGlassBmp;
-        if (cached != null && !cached.isRecycled()) return cached;
-        Bitmap base = PlayPage.isPlayWindow(v) ? PlayPage.playBmp() : BgPeel.sWpBmp;
-        if (base == null || base.isRecycled()) base = BgPeel.sWpBmp;
+        Bitmap bar = BgPeel.sWpBarBmp;
+        if (bar != null && !bar.isRecycled()) return bar;
+        Bitmap base = BgPeel.sWpBmp;
         if (base == null || base.isRecycled()) return null;
-        Bitmap g = null;
+        // 武装间隙：临时按 chrome 档现糊一帧（不进长期缓存）
         try {
-            g = io.github.ariinyume.morimod.util.BlurUtil.apply(base, BgPeel.GLASS_BLUR_PCT);
-        } catch (Throwable ignored) {
+            MoriConfig cfg = RemoteConfig.get();
+            int chrome = cfg != null ? Math.max(0, Math.min(50, cfg.f2ChromeBlur)) : 20;
+            if (chrome <= 0) return base;
+            Bitmap g = io.github.ariinyume.morimod.util.BlurUtil.apply(base, chrome);
+            return (g != null && !g.isRecycled()) ? g : base;
+        } catch (Throwable t) {
+            return base;
         }
-        if (g == null || g.isRecycled() || g == base) return null;
-        BgPeel.sWpGlassBmp = g;
-        return g;
     }
 
 
@@ -1050,6 +1054,12 @@ final class PanelGlass {
         if (BgPeel.sReviewHitLogs < 4) {
             BgPeel.sReviewHitLogs++;
             BgPeel.log("review bg hit -> " + BgPeel.name(v) + " " + w + "x" + h);
+        }
+        // ★ v0.2.3：底图画上后立刻给同窗 TextView 上阴影（SOFT + 大半径）
+        try {
+            View root = v.getRootView();
+            if (root != null) TextShadow.scheduleShadowRefresh(root, "reviewBgHit");
+        } catch (Throwable ignored) {
         }
         return true;
     }

@@ -28,6 +28,7 @@ import io.github.ariinyume.morimod.ui.screens.AboutScreen
 import io.github.ariinyume.morimod.ui.screens.BackgroundScreen
 import io.github.ariinyume.morimod.ui.screens.FontScreen
 import io.github.ariinyume.morimod.ui.screens.LayoutScreen
+import io.github.ariinyume.morimod.ui.screens.SubtitleScreen
 import io.github.ariinyume.morimod.ui.theme.MoriModTheme
 
 /**
@@ -67,6 +68,7 @@ class PageActivity : ComponentActivity() {
         const val PAGE_BACKGROUND = "background"
         const val PAGE_FONT = "font"
         const val PAGE_LAYOUT = "layout"
+        const val PAGE_SUBTITLE = "subtitle"
         const val PAGE_ABOUT = "about"
 
         /** 构造跳转意图；[page] 必须是上面常量之一。 */
@@ -79,6 +81,7 @@ class PageActivity : ComponentActivity() {
             Dest.BACKGROUND -> PAGE_BACKGROUND
             Dest.FONT -> PAGE_FONT
             Dest.LAYOUT -> PAGE_LAYOUT
+            Dest.SUBTITLE -> PAGE_SUBTITLE
             Dest.ABOUT -> PAGE_ABOUT
         }
     }
@@ -126,6 +129,9 @@ private fun PageHost(page: String, onBack: () -> Unit) {
 
             PageActivity.PAGE_LAYOUT ->
                 LayoutScreen(vm = vm, onBack = onBack, modifier = pageModifier)
+
+            PageActivity.PAGE_SUBTITLE ->
+                SubtitleScreen(vm = vm, onBack = onBack, modifier = pageModifier)
 
             else ->
                 AboutScreen(vm = vm, onBack = onBack, modifier = pageModifier)

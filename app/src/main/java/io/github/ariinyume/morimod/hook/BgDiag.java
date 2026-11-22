@@ -371,6 +371,7 @@ final class BgDiag {
             }
             BgPeel.sReviewToken = tok;
             BgPeel.sReviewBgRef = new java.lang.ref.WeakReference<>(bg);
+            BgPeel.sReviewUiRoot = new java.lang.ref.WeakReference<>(root);
             BgPeel.sReviewRescan = false;
             BgPeel.reviewLog("review bg arm " + why + " -> " + BgPeel.name(bg)
                     + " " + bg.getWidth() + "x" + bg.getHeight());
@@ -378,6 +379,11 @@ final class BgDiag {
                 bg.invalidate();
                 ViewParent p = bg.getParent();
                 if (p instanceof View) ((View) p).invalidate();
+            } catch (Throwable ignored) {
+            }
+            // ★ v0.2.7：arm 成功后立刻刷整窗阴影（addView 路径以前漏了）
+            try {
+                TextShadow.scheduleShadowRefresh(root, "reviewArm:" + why);
             } catch (Throwable ignored) {
             }
         } catch (Throwable t) {

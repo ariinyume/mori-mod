@@ -369,6 +369,7 @@ public final class FeatureF2 {
     private static volatile String sBarKey = "";
 
     /** 顶栏 / 底栏的模糊强度（0–100，越大越糊）。r25 用户指定：20%。 */
+    /** 信息控件模糊默认档（与历史写死 20% 对齐；现由 {@link MoriConfig#f2ChromeBlur} 覆盖）。 */
     public static final int BAR_BLUR_PCT = 20;
 
     /** 顶栏 / 底栏压在上面的黑色蒙层（%），保证图标文字在亮壁纸上也看得清。r25：8%。 */
@@ -386,16 +387,20 @@ public final class FeatureF2 {
      */
     public static Bitmap barBitmap(MoriConfig cfg) {
         if (cfg == null || !cfg.f2Enabled) return null;
+        int chrome = Math.max(0, Math.min(50, cfg.f2ChromeBlur));
         String key = cfg.f2HomeBg
-                + "|bar" + BAR_BLUR_PCT + "|" + cfg.f2Blur;
+                + "|bar" + chrome + "|" + cfg.f2Blur;
         Bitmap cur = sBarBmp;
         if (cur != null && !cur.isRecycled() && key.equals(sBarKey)) return cur;
 
         // ★ 必须基于**用户已配好遮罩/模糊的那张位图**再糊一层，
         //   否则顶栏会比页面亮一个档次（r22 就是这么错的）。
+        // ★ v0.2.10：档位改由「信息控件背景模糊」控制（0–50%，默认 20）。
         Bitmap base = cachedBitmap(cfg);
         if (base == null) return null;
-        Bitmap blurred = io.github.ariinyume.morimod.util.BlurUtil.apply(base, BAR_BLUR_PCT);
+        Bitmap blurred = chrome > 0
+                ? io.github.ariinyume.morimod.util.BlurUtil.apply(base, chrome)
+                : base;
         if (blurred == null) return null;
         sBarBmp = blurred;
         sBarKey = key;
@@ -428,7 +433,7 @@ public final class FeatureF2 {
      */
     public static Bitmap playBgBitmap(MoriConfig cfg) {
         if (cfg == null || !cfg.f2Enabled) return null;
-        int pct = Math.max(0, Math.min(100, cfg.f2PlayBlur));
+        int pct = Math.max(0, Math.min(50, cfg.f2PlayBlur));
         String key = cfg.f2HomeBg
                 + "|play" + pct + "|" + cfg.f2Blur;
         Bitmap cur = sPlayBmp;
@@ -491,7 +496,7 @@ public final class FeatureF2 {
      * 模糊只在这里做（一次性），{@link CoverDrawable} 每帧只是画一张位图。
      */
     private static Bitmap cachedBitmap(MoriConfig cfg) {
-        int blur = Math.max(0, Math.min(100, cfg.f2Blur));
+        int blur = Math.max(0, Math.min(50, cfg.f2Blur));
         String key = cfg.f2HomeBg;
         String ck = key + "|b" + blur;
         if (ck.equals(sCachedBmpKey) && sCachedBmp != null && !sCachedBmp.isRecycled()) {
@@ -560,6 +565,7 @@ public final class FeatureF2 {
                 + "|" + (cfg.f2HomeBg == null ? "" : cfg.f2HomeBg)
                 + "|b" + cfg.f2Blur
                 + "|p" + cfg.f2PlayBlur
+                + "|c" + cfg.f2ChromeBlur
                 + "|m" + cfg.f2MaskAlpha
                 + "|a" + (cfg.f2Accent ? "1" : "0")
                 + "|" + (cfg.f2AccentStyle == null ? "" : cfg.f2AccentStyle);

@@ -420,16 +420,16 @@ private data class BundledFont(
 
 private val BUNDLED_FONTS = listOf(
     BundledFont(
-        label = "思源黑体 SC Regular",
-        asset = "fonts/source_han_sans_sc.otf",
+        label = "圆构黑体 Geource Sans CHS",
+        asset = "fonts/geource_sans_chs.ttf",
         license = "SIL OFL 1.1",
-        source = "Adobe",
+        source = "howlingFounts",
     ),
     BundledFont(
-        label = "得意黑 Smiley Sans Oblique",
-        asset = "fonts/smiley_sans.otf",
+        label = "普力士 Plix Regular",
+        asset = "fonts/plix_regular.otf",
         license = "SIL OFL 1.1",
-        source = "atelierAnchor",
+        source = "cathree3",
     ),
 )
 

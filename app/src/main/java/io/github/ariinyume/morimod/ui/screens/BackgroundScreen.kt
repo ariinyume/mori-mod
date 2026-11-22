@@ -196,22 +196,19 @@ internal fun BackgroundScreen(
                     )
 
                     Spacer(Modifier.height(rowGap))
-                    // ★★★ v0.1.149：背景模糊 / 播放页模糊步进 5%（0–100，共 21 档）。
+                    // ★ v0.2.10：主背景 / 播放页 / 信息控件模糊均为 0–50%，步进 5%（共 11 档）。
                     LabeledSlider(
                         label = S.F2_BLUR,
                         value = cfg.f2Blur.toFloat(),
                         onValueChange = {
                             vm.setF2Blur((kotlin.math.round(it / 5f) * 5).toInt())
                         },
-                        steps = 19,
+                        valueRange = 0f..50f,
+                        steps = 9,
                         enabled = cfg.f2Enabled,
                         onValueChangeFinished = { vm.commitF2Blur() },
                     )
 
-                    // ★ v0.1.21 用户第 2 条：遮罩浓度滑条已删（它只作用在被完全盖住的
-                    //   窗口层上 ⇒ 拖了宿主毫无反应），换成「播放页背景模糊」。
-                    //   播放页的底色是宿主自己的不透明背景图，我们会换成用户壁纸，
-                    //   这个档位专门控制那一层的模糊程度（0–100%，5% 步进）。
                     Spacer(Modifier.height(rowGap))
                     LabeledSlider(
                         label = S.F2_PLAY_BLUR,
@@ -219,9 +216,23 @@ internal fun BackgroundScreen(
                         onValueChange = {
                             vm.setF2PlayBlur((kotlin.math.round(it / 5f) * 5).toInt())
                         },
-                        steps = 19,
+                        valueRange = 0f..50f,
+                        steps = 9,
                         enabled = cfg.f2Enabled,
                         onValueChangeFinished = { vm.commitF2PlayBlur() },
+                    )
+
+                    Spacer(Modifier.height(rowGap))
+                    LabeledSlider(
+                        label = S.F2_CHROME_BLUR,
+                        value = cfg.f2ChromeBlur.toFloat(),
+                        onValueChange = {
+                            vm.setF2ChromeBlur((kotlin.math.round(it / 5f) * 5).toInt())
+                        },
+                        valueRange = 0f..50f,
+                        steps = 9,
+                        enabled = cfg.f2Enabled,
+                        onValueChangeFinished = { vm.commitF2ChromeBlur() },
                     )
                 }
             }
@@ -306,12 +317,6 @@ internal fun BackgroundScreen(
                             onCheckedChange = { vm.setF2Accent(it) },
                         )
                     }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = S.F2_ACCENT_NOTE,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
 
                     // 开关开启后才出现「强调色风格」（用户第 4 条的原话）
                     if (cfg.f2Accent) {

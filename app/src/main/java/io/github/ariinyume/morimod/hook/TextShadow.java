@@ -12,6 +12,8 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Layout;
+import android.text.TextPaint;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -67,36 +69,63 @@ final class TextShadow {
     }
 
 
+    /**
+     * ★ v0.2.3 / v0.2.6：是否月度回顾 UI。
+     * <p>不依赖类名含 Dialog；token / 底图 / 软确认根 / 文案 cue 任一命中即可。
+     */
+    static boolean isReviewUi(View v) {
+        if (v == null) return false;
+        try {
+            View root = v.getRootView();
+            if (root != null && BgPeel.sReviewToken != null
+                    && root.getWindowToken() == BgPeel.sReviewToken) {
+                return true;
+            }
+            View soft = BgPeel.sReviewUiRoot == null ? null : BgPeel.sReviewUiRoot.get();
+            if (soft != null) {
+                // soft 可能是 DecorView，也可能是故事容器：祖先命中即可
+                if (soft == root || soft == v) return true;
+                View cur = v;
+                for (int i = 0; i < 24 && cur != null; i++) {
+                    if (cur == soft) return true;
+                    ViewParent p = cur.getParent();
+                    cur = p instanceof View ? (View) p : null;
+                }
+            }
+            View marked = BgPeel.sReviewBgRef == null ? null : BgPeel.sReviewBgRef.get();
+            if (marked != null) {
+                View mr = marked.getRootView();
+                if (mr != null && mr == root) return true;
+            }
+            // 底图 token 尚未钉住时：文案 cue 也能先上阴影
+            if (CoverLayer.cueHit(v, BgPeel.MONTHLY_REVIEW_CUES)) return true;
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     static void ensureShadow(TextView tv) {
         if (!BgPeel.sArmed) return;
         try {
+            boolean reviewUi = isReviewUi(tv);
             CharSequence cs = null;
             try {
                 cs = tv.getText();
-                if (cs != null && cs.length() <= 1) return;
+                // 单字符默认跳过；月度回顾榜单序号「1」…「5」仍要阴影
+                if (cs != null && cs.length() <= 1) {
+                    boolean reviewDigit = reviewUi && cs.length() == 1
+                            && Character.isDigit(cs.charAt(0));
+                    if (!reviewDigit) return;
+                }
             } catch (Throwable ignored) {
             }
             float ts = tv.getTextSize();
             if (ts <= 0f) return;
-            float radius = ts * BgPeel.TEXT_SHADOW_RADIUS_RATIO;
             // 超宽跑马灯字条：必须保留阴影；只是不要为它反复 invalidate。
             boolean wideMarquee = BgPeel.sSW > 0 && tv.getWidth() > BgPeel.sSW + BgPeel.sSW / 5;
             Float last = BgPeel.SHADOWED.get(tv);
-            int col = shadowColor();
-            // v0.1.121/122：半径缓存命中时仍写回 Paint（不 invalidate）。
-            // 开滚 / 硬件层常把阴影清掉；每帧改 Paint 很轻，能稳住曲名阴影。
-            // ★ v0.1.127：稳态只碰 Paint，绝不走 TextView#setShadowLayer
-            //   （那条 API 必 invalidate，热路径会死循环）。
-            if (last != null && Math.abs(last - radius) < 0.01f) {
-                if (last > 0f) {
-                    Paint p0 = tv.getPaint();
-                    if (p0 != null) p0.setShadowLayer(radius, 0f, 0f, col);
-                }
-                return;
-            }
-            // 回顾文案 / 白底按钮字不加阴影。
-            if (CoverLayer.cueHit(tv, BgPeel.REVIEW_CARD_CUES) || CoverLayer.cueHit(tv, BgPeel.MONTHLY_REVIEW_CUES)
-                    || CoverLayer.cueHit(tv, BgPeel.BUTTON_CUES)) {
+            // ★ v0.2.6：白底按钮字仍不加阴影；首页回顾卡片短文案在壁纸上必须有阴影。
+            if (!reviewUi && CoverLayer.cueHit(tv, BgPeel.BUTTON_CUES)) {
                 if (last != null && last > 0f) {
                     try {
                         tv.setShadowLayer(0f, 0f, 0f, 0);
@@ -108,6 +137,20 @@ final class TextShadow {
                     BgPeel.SHADOWED.put(tv, 0f);
                 } else {
                     BgPeel.SHADOWED.put(tv, 0f);
+                }
+                return;
+            }
+            // ★ v0.2.9：全页面统一轻阴影（字号 8%、无偏移）；不再给回顾页加重/软件层。
+            float ratio = BgPeel.TEXT_SHADOW_RADIUS_RATIO;
+            float radius = Math.max(ts * ratio, 0f);
+            float dy = 0f;
+            float dx = 0f;
+            int col = shadowColor();
+            // v0.1.121/122：半径缓存命中时仍写回 Paint（不 invalidate）。
+            if (last != null && Math.abs(last - radius) < 0.01f) {
+                if (last > 0f) {
+                    Paint p0 = tv.getPaint();
+                    if (p0 != null) p0.setShadowLayer(radius, dx, dy, col);
                 }
                 return;
             }
@@ -145,13 +188,13 @@ final class TextShadow {
             } else if (wideMarquee) {
                 // 超宽条：只改 Paint，避免 invalidate 放大切页抖动。
                 Paint p = tv.getPaint();
-                if (p != null) p.setShadowLayer(radius, 0f, 0f, col);
+                if (p != null) p.setShadowLayer(radius, dx, dy, col);
             } else {
                 try {
-                    tv.setShadowLayer(radius, 0f, 0f, col);
+                    tv.setShadowLayer(radius, dx, dy, col);
                 } catch (Throwable t) {
                     Paint p = tv.getPaint();
-                    if (p != null) p.setShadowLayer(radius, 0f, 0f, col);
+                    if (p != null) p.setShadowLayer(radius, dx, dy, col);
                     tv.invalidate();
                 }
             }
@@ -294,7 +337,16 @@ final class TextShadow {
     static void scheduleShadowRefresh(final View root, final String why) {
         if (!BgPeel.sArmed || root == null) return;
         try {
-            if (PlayPage.isPlayWindow(root) || PlayPage.playContext(root)) return;
+            // 月度回顾窗允许刷；勿被 play 误判挡掉
+            boolean review = false;
+            try {
+                if (BgPeel.sReviewToken != null
+                        && root.getWindowToken() == BgPeel.sReviewToken) {
+                    review = true;
+                }
+            } catch (Throwable ignored) {
+            }
+            if (!review && (PlayPage.isPlayWindow(root) || PlayPage.playContext(root))) return;
         } catch (Throwable ignored) {
         }
         long now = System.currentTimeMillis();
@@ -326,6 +378,50 @@ final class TextShadow {
     static int shadowColor() {
         return AccentColor.on() ? AccentColor.shadow(BgPeel.TEXT_SHADOW_ALPHA)
                 : (BgPeel.TEXT_SHADOW_ALPHA << 24);
+    }
+
+    /**
+     * ★ v0.2.10：月度回顾故事页补轻量四方向描边。
+     * <p>宿主 2.24.0 回顾文案来自远端 i18n，仍走 RN TextView；ColorOS 常吞掉
+     * {@code setShadowLayer}，截图上呈「纯白无阴影」。仅在 {@link #isReviewUi} 时补描，
+     * 首页回顾卡 / 普通列表不走此路径，避免深描边污染。
+     */
+    static void paintFauxShadow(Canvas cv, TextView tv) {
+        if (cv == null || tv == null || !BgPeel.sArmed) return;
+        try {
+            if (!isReviewUi(tv)) return;
+            Layout layout = tv.getLayout();
+            if (layout == null) return;
+            CharSequence cs = tv.getText();
+            if (cs == null || cs.length() == 0) return;
+            TextPaint tp = tv.getPaint();
+            if (tp == null) return;
+            int old = tp.getColor();
+            float oldSw = tp.getStrokeWidth();
+            Paint.Style oldStyle = tp.getStyle();
+            // 与 ensureShadow 同 alpha；步长约字号 4%，四向轻描
+            int shadow = shadowColor();
+            float step = Math.max(1.0f, tv.getTextSize() * 0.04f);
+            int pl = tv.getTotalPaddingLeft();
+            int pt = tv.getTotalPaddingTop();
+            cv.save();
+            cv.translate(pl, pt);
+            tp.setColor(shadow);
+            final float[][] offs = {
+                    {-step, 0}, {step, 0}, {0, -step}, {0, step},
+            };
+            for (float[] o : offs) {
+                cv.save();
+                cv.translate(o[0], o[1]);
+                layout.draw(cv);
+                cv.restore();
+            }
+            tp.setColor(old);
+            tp.setStrokeWidth(oldSw);
+            tp.setStyle(oldStyle);
+            cv.restore();
+        } catch (Throwable ignored) {
+        }
     }
 
 

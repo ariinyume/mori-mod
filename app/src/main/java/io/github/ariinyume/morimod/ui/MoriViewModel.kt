@@ -359,6 +359,36 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         if (persist()) toast = S.TOAST_SAVED
     }
 
+    /** 字幕调整总开关。 */
+    fun setF6Enabled(v: Boolean) {
+        adoptDiskIfNewer()
+        if (config.f6Enabled == v) return
+        config.f6Enabled = v
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** 播放页宿主字幕字号倍率（1.0–1.5，步进 0.1）。 */
+    fun setF6SubtitleScale(v: Float) {
+        adoptDiskIfNewer()
+        if (!config.f6Enabled) return
+        val snapped = (Math.round(v * 10f) / 10f).coerceIn(1.0f, 1.5f)
+        if (kotlin.math.abs(config.f6SubtitleScale - snapped) < 0.01f) return
+        config.f6SubtitleScale = snapped
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** 字幕背景透明开关。 */
+    fun setF6SubtitleBgTransparent(v: Boolean) {
+        adoptDiskIfNewer()
+        if (!config.f6Enabled) return
+        if (config.f6SubtitleBgTransparent == v) return
+        config.f6SubtitleBgTransparent = v
+        config.clamp()
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
     /** 打开布局页时补齐默认区块目录（不落盘，只保证 UI 有列表）。 */
     fun ensureF5Catalog() {
         adoptDiskIfNewer()
@@ -519,13 +549,24 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setF2PlayBlur(v: Int) {
         // 5% 步进落盘，避免滑条吸附后仍写成 1% 碎值
-        val snapped = ((v.coerceIn(0, 100) + 2) / 5) * 5
-        config.f2PlayBlur = snapped.coerceIn(0, 100)
+        val snapped = ((v.coerceIn(0, 50) + 2) / 5) * 5
+        config.f2PlayBlur = snapped.coerceIn(0, 50)
         touch()
     }
 
     fun commitF2PlayBlur() {
         // 不 adopt：拖动中的模糊值只在内存，对齐磁盘会冲掉松手前的档位
+        if (persist()) toast = S.TOAST_SAVED
+    }
+
+    /** 信息控件背景模糊（迷你条 / 导航底栏 / 信息面板，0–50%）。 */
+    fun setF2ChromeBlur(v: Int) {
+        val snapped = ((v.coerceIn(0, 50) + 2) / 5) * 5
+        config.f2ChromeBlur = snapped.coerceIn(0, 50)
+        touch()
+    }
+
+    fun commitF2ChromeBlur() {
         if (persist()) toast = S.TOAST_SAVED
     }
 
@@ -559,8 +600,8 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
      * 拖动过程中不落盘，松手由 [commitF2Blur] 提交。
      */
     fun setF2Blur(v: Int) {
-        val snapped = ((v.coerceIn(0, 100) + 2) / 5) * 5
-        config.f2Blur = snapped.coerceIn(0, 100)
+        val snapped = ((v.coerceIn(0, 50) + 2) / 5) * 5
+        config.f2Blur = snapped.coerceIn(0, 50)
         touch()
     }
 
@@ -840,16 +881,9 @@ class MoriViewModel(app: Application) : AndroidViewModel(app) {
         val logged = XPrefs.getLong(app, HostStatusReceiver.PREFS,
             HostStatusReceiver.K_LOGGED_IN, 0L) == 1L
         hostLoggedIn = logged
-        if (hostAliveRecently && !logged && config.f5Enabled) {
-            // 先对齐磁盘，避免用主页旧快照把二级页刚存的壁纸/F5 一起写坏
-            adoptDiskIfNewer()
-            if (config.f5Enabled) {
-                config.f5Enabled = false
-                restoreDefaultF5Order()
-                config.clamp()
-                persist()
-            }
-        }
+        // ★ v0.2.4：不再因单次「未登录」心跳自动关掉 F5。
+        //   宿主重启空窗 / F5 误压首页时心跳会短暂报未登录，自动关会抹掉用户排序。
+        //   未登录仅反映在状态卡；真正开 F5 仍由 setF5Enabled 拦截。
         // LSPosed 作用域里有宿主 ⇒ 正常运行。不再因为心跳过期写成未运行。
         val scoped = LspScope.granted
         if (scoped != null) {

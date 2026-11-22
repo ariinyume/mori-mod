@@ -304,6 +304,8 @@ public final class BgPeel {
 
     /** 绘制用的临时对象（draw 都在 UI 线程，复用避免每帧分配）。 */
     static final ThreadLocal<int[]> LOC = ThreadLocal.withInitial(() -> new int[2]);
+    /** windowLoc 里与 getLocationInWindow 对比用的布局坐标缓冲。 */
+    static final ThreadLocal<int[]> TMP2 = ThreadLocal.withInitial(() -> new int[2]);
 
     /**
      * ★★★ v0.1.98：<b>本层所在窗口的尺寸</b> {@code [w, h]}（每次绘制当场取，不用缓存值）。
@@ -1320,6 +1322,12 @@ public final class BgPeel {
     static volatile android.os.IBinder sReviewToken;
     /** 月度回顾满屏底图（ReactImageView / ExpoImageView）。 */
     static volatile java.lang.ref.WeakReference<View> sReviewBgRef;
+    /**
+     * ★ v0.2.6：阴影用的「软确认」根。
+     * <p>满屏底图经常 bfs 深度不够确认失败；只要非主窗上出现月度回顾文案，
+     * 先钉住这个根，让整窗 TextView 走回顾强阴影，不等底图 arm。
+     */
+    static volatile java.lang.ref.WeakReference<View> sReviewUiRoot;
     /** 最近一次入窗 / 兜底扫描时刻（节流）。 */
     static volatile long sReviewProbeAt;
     /** 上次看到的窗口数量（兜底：窗口数增加才扫）。 */
@@ -1375,15 +1383,41 @@ public final class BgPeel {
     static void noteReviewCueText(TextView tv) {
         try {
             if (!sArmed || tv == null) return;
-            if (!CoverLayer.cueHit(tv, MONTHLY_REVIEW_CUES)) return;
-            if (!inDialogWindow(tv)) return;
             View root = tv.getRootView();
             if (root == null) return;
+            boolean cue = CoverLayer.cueHit(tv, MONTHLY_REVIEW_CUES);
+            boolean reviewUi = TextShadow.isReviewUi(tv);
+            if (!cue && !reviewUi) return;
+            // ★ v0.2.9：只软确认「独立 Dialog 窗」的月度故事；
+            //   回顾二级页（主窗里的「回顾」列表）cue 会命中「根据播放记录」等，
+            //   若软确认主窗 token，回首页后整 App 都会被当成 reviewUi（深阴影污染）。
+            if (cue && isReviewDialogCandidate(root)
+                    && !PlayPage.isPlayWindow(root) && !PlayPage.playContext(root)) {
+                softArmReviewUi(root);
+                BgPeel.reviewLog("review soft-arm ← cueText " + BgPeel.name(root));
+            }
+            TextShadow.scheduleShadowRefresh(root, cue ? "reviewCue" : "reviewUi");
+            if (!cue) return;
             android.os.IBinder tok = root.getWindowToken();
             View marked = sReviewBgRef == null ? null : sReviewBgRef.get();
             if (tok != null && tok == sReviewToken && marked != null) return;
-            // 文案已在，直接探（不再干等 700ms）
             BgDiag.probeReviewDialog(root, "cueText");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 软确认回顾窗：阴影路径可立刻 isReviewUi，不等满屏底。 */
+    static void softArmReviewUi(View root) {
+        if (root == null) return;
+        try {
+            // ★ v0.2.9：主窗绝不能 soft-arm（否则回首页整树深阴影）
+            if (!isReviewDialogCandidate(root)) return;
+            sReviewUiRoot = new java.lang.ref.WeakReference<>(root);
+            android.os.IBinder tok = root.getWindowToken();
+            if (tok != null && sReviewToken == null) {
+                sReviewToken = tok;
+            }
+            TextShadow.scheduleShadowRefresh(root, "softArm");
         } catch (Throwable ignored) {
         }
     }
@@ -1460,6 +1494,41 @@ public final class BgPeel {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /**
+     * ★ v0.2.8：宿主毛玻璃是否应保留（不 drop / 不 mute）。
+     * <ul>
+     *   <li>月度回顾内页：小卡片 frosted glass，mute 后会出现半截灰糊</li>
+     *   <li>紧凑横条（近满宽、&lt;18% 屏高）：播放页字幕强调色底常走 ExpoBlur</li>
+     * </ul>
+     * 近满屏氛围模糊仍由 {@code hookExpoBlur} 丢掉。
+     */
+    static boolean keepHostBlur(View v) {
+        if (v == null) return false;
+        try {
+            if (TextShadow.isReviewUi(v)) return true;
+            int w = v.getWidth();
+            int h = v.getHeight();
+            if (w <= 0 || h <= 0) return false;
+            if (sSW <= 0 || sSH <= 0) {
+                return h > 0 && h < 220 && w > h * 2;
+            }
+            // 紧凑条：≥45% 屏宽且 <18% 屏高（播放页字幕强调色底）
+            // 用户开了「字幕背景透明」时不要保留毛玻璃
+            if (w * 100 >= (long) sSW * 45 && h * 100 < (long) sSH * 18) {
+                MoriConfig cfg = RemoteConfig.get();
+                if (cfg != null && cfg.f6SubtitleBgTransparent) return false;
+                return true;
+            }
+            // 回顾页里的非满屏卡片毛玻璃（声优卡等）
+            if (TextShadow.isReviewUi(v)
+                    && (w * 100 < (long) sSW * 92 || h * 100 < (long) sSH * 55)) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     /**
@@ -1600,14 +1669,14 @@ public final class BgPeel {
         return false;
     }
 
-    /** 找 Dialog 内 @0,0 且 ≥92%×92% 窗口的图片层。 */
+    /** 找 Dialog 内近满屏的图片层（v0.2.7 放宽：深度 / 占比 / 顶边距）。 */
     static View findFullscreenReviewBackdrop(View v, int depth, int visited) {
-        if (v == null || depth > 10 || visited > 80) return null;
+        if (v == null || depth > 16 || visited > 160) return null;
         if (isFullscreenReviewBackdrop(v)) return v;
         if (!(v instanceof ViewGroup)) return null;
         ViewGroup g = (ViewGroup) v;
         int n = g.getChildCount();
-        if (n > 12) n = 12;
+        if (n > 20) n = 20;
         int next = visited + 1;
         for (int i = 0; i < n; i++) {
             View hit = findFullscreenReviewBackdrop(g.getChildAt(i), depth + 1, next + i);
@@ -1628,7 +1697,8 @@ public final class BgPeel {
             int rw = root.getWidth();
             int rh = root.getHeight();
             if (rw <= 0 || rh <= 0) return false;
-            if (w * 100 < (long) rw * 92 || h * 100 < (long) rh * 92) return false;
+            // 2.24 回顾底偶发略矮于 92%；放宽到 85%
+            if (w * 100 < (long) rw * 85 || h * 100 < (long) rh * 85) return false;
             int[] loc = LOC.get();
             v.getLocationOnScreen(loc);
             int vx = loc[0];
@@ -1636,8 +1706,8 @@ public final class BgPeel {
             root.getLocationOnScreen(loc);
             int dx = vx - loc[0];
             int dy = vy - loc[1];
-            // 贴窗顶角（允许状态栏级偏差）
-            return dx <= 8 && dy <= 24;
+            // 贴窗顶角（允许状态栏 / 刘海偏差）
+            return dx <= 24 && dy <= 120;
         } catch (Throwable t) {
             return false;
         }
@@ -1695,6 +1765,7 @@ public final class BgPeel {
     static void clearReviewBgMark() {
         sReviewToken = null;
         sReviewBgRef = null;
+        sReviewUiRoot = null;
         sReviewHitLogs = 0;
     }
 
@@ -1802,7 +1873,8 @@ public final class BgPeel {
                         XposedCompat.hookMethod(m, new XposedCompat.VoidHook() {
                             @Override
                             protected void afterVoid(io.github.libxposed.api.XposedInterface.Chain chain) {
-                                PlayPage.beginLightNav(280);
+                                // ★ v0.2.8：媒体库选项卡切换壁纸热路径更长，避免糊完又卡
+                                PlayPage.beginLightNav(520);
                             }
                         });
                         n++;
@@ -1861,7 +1933,7 @@ public final class BgPeel {
         if (dens < 1.5f) dens = 3f;
         float slop = 12f * dens;
         if (dx >= slop && dx > dy * 1.2f) {
-            PlayPage.beginLightNav(280);
+            PlayPage.beginLightNav(520);
         }
     }
 
@@ -2157,6 +2229,21 @@ public final class BgPeel {
                         if (v != null) {
                             PlayPage.notePlaySeek(v);
                         }
+                        // ★ v0.2.2：月度回顾故事条横滑会长期 lightNav，原先在这里直接
+                        //   proceed 导致回顾页文字永远不加阴影。轻量补阴影后再放行。
+                        if (v instanceof TextView
+                                && inAppWindow(v) && !foreignModuleView(v)) {
+                            noteReviewCueText((TextView) v);
+                            TextShadow.ensureShadow((TextView) v);
+                            // lightNav 会跳过下方 paintFauxShadow；回顾内页这里补描
+                            if (cv != null) {
+                                TextShadow.paintFauxShadow(cv, (TextView) v);
+                                FeatureF6.onTextDraw(cv, (TextView) v);
+                                if (FeatureF6.wrapDrawScale(chain, (TextView) v, cv)) {
+                                    return null;
+                                }
+                            }
+                        }
                         if (cv != null && CoverLayer.looksLikeCoverArt(v)
                                 && CoverLayer.coverBlocked(v)) {
                             CoverLayer.paintCoverMask(cv, v);
@@ -2294,6 +2381,8 @@ public final class BgPeel {
                                 //   颜色一改就把「只写在 Paint 上」的阴影冲掉。
                                 forceAccentSmallText((TextView) v);
                                 TextShadow.ensureShadow((TextView) v);
+                                // ★ v0.2.8：播放页字幕缩放 + 强调色底兜底（在 proceed 前）
+                                FeatureF6.onTextDraw(cv, (TextView) v);
                             }
                         } else if (CoverLayer.rescueCover(v)) {
                             CoverLayer.noteCoverKept();
@@ -2310,8 +2399,29 @@ public final class BgPeel {
                     }
                 } catch (Throwable ignored) {
                 }
+                // ★ v0.2.7：回顾页 / 回顾卡在宿主 draw 前先描一圈假阴影（抗 ColorOS 吞 shadowLayer）
+                try {
+                    if (cv != null && v instanceof TextView
+                            && inAppWindow(v) && !foreignModuleView(v)) {
+                        TextShadow.paintFauxShadow(cv, (TextView) v);
+                    }
+                } catch (Throwable ignored) {
+                }
                 long tPre = timeDraw ? System.nanoTime() : 0L;
-                Object r = chain.proceed();
+                // ★ v0.2.11：字幕 Canvas 缩放兜底（RN 冲掉 setTextSize 时仍可见放大）
+                Object r = null;
+                boolean f6Scaled = false;
+                try {
+                    if (cv != null && v instanceof TextView
+                            && inAppWindow(v) && !foreignModuleView(v)) {
+                        f6Scaled = FeatureF6.wrapDrawScale(chain, (TextView) v, cv);
+                    }
+                } catch (Throwable ignored) {
+                    f6Scaled = false;
+                }
+                if (!f6Scaled) {
+                    r = chain.proceed();
+                }
                 // ★★★ v0.1.92 诊断：单次 >=10ms 就记一笔（含「我们」与 proceed 的分项）。
                 if (timeDraw) {
                     try {
@@ -2466,6 +2576,11 @@ public final class BgPeel {
                         if (sArmed && self instanceof View) {
                             View v = (View) self;
                             if (v.getWidth() > 0 && v.getHeight() > 0) {
+                                // ★ v0.2.8：回顾小卡 / 播放页字幕条放行宿主毛玻璃，
+                                //   否则易出现半截灰糊或字幕强调色底消失。
+                                if (keepHostBlur(v)) {
+                                    return chain.proceed();
+                                }
                                 BgDiag.hit("drop blurview -> ", v,
                                         dstRect(v.getWidth(), v.getHeight()));
                                 return null;
@@ -2484,8 +2599,11 @@ public final class BgPeel {
                 XposedCompat.hookMethod(sre, chain -> {
                     try {
                         Object self = chain.getThisObject();
-                        if (sArmed && self != null
+                        if (sArmed && self instanceof View
                                 && CLS_LIB_BLUR.equals(self.getClass().getName())) {
+                            if (keepHostBlur((View) self)) {
+                                return chain.proceed();
+                            }
                             return chain.proceed(new Object[]{null});
                         }
                     } catch (Throwable ignored) {
@@ -2524,8 +2642,12 @@ public final class BgPeel {
                                 && (pt.length != 1 || pt[0] != Canvas.class)) continue;
                         m.setAccessible(true);
                         XposedCompat.hookMethod(m, chain -> {
+                            Object self = chain.getThisObject();
                             Object ret = chain.proceed();
-                            BgLeaf.hideBlurDescendants(chain.getThisObject(), inners);
+                            // ★ v0.2.8：紧凑毛玻璃（字幕条 / 回顾卡）不藏子层
+                            if (!(self instanceof View) || !keepHostBlur((View) self)) {
+                                BgLeaf.hideBlurDescendants(self, inners);
+                            }
                             return ret;
                         });
                         hooked++;
@@ -2548,8 +2670,12 @@ public final class BgPeel {
                     if (pt.length != 1 || pt[0] != float.class) continue;
                     m.setAccessible(true);
                     XposedCompat.hookMethod(m, chain -> {
+                        Object self = chain.getThisObject();
+                        if (self instanceof View && keepHostBlur((View) self)) {
+                            return chain.proceed();
+                        }
                         Object ret = chain.proceed(new Object[]{0f});
-                        BgLeaf.hideBlurDescendants(chain.getThisObject(), inners);
+                        BgLeaf.hideBlurDescendants(self, inners);
                         return ret;
                     });
                     hooked++;
@@ -4140,6 +4266,11 @@ public final class BgPeel {
         try {
             View v = ownerView(d);
             if (v == null) return false;
+            // ★ v0.2.10：字幕背景透明 —— 跳过宿主 BackgroundDrawable 自绘（RN 会反复写回底色）。
+            if (FeatureF6.shouldSkipHostBg(v)) {
+                sPainted = true;
+                return true;
+            }
             // ★★★ v0.1.146：隐私政策 / 使用条款 WebView 不换底、不丢 dim。
             if (isWebContentView(v)) return false;
             Rect b = d.getBounds();
@@ -4529,18 +4660,19 @@ public final class BgPeel {
      */
     static final String[] MONTHLY_REVIEW_CUES = {
             // zh-CN
-            "月度回顾", "分享月度", "正在分析播放",
-            "最常听的作品", "根据播放记录",
-            "播放时长",   // 首屏「10月的播放时长」—— CD / 推荐页文案还没挂时靠它
+            "月度回顾", "分享月度", "分享月度回顾", "正在分析播放",
+            "最常听的作品", "最常听的声优", "根据播放记录",
+            "收听时长的", "播放时长", "月的播放",  // 「10月的播放时长」
             // zh-TW
-            "月度回顧", "分享月度", "正在分析播放",
-            "最常聽的作品", "根據播放記錄", "播放時長",
+            "月度回顧", "分享月度", "分享月度回顧", "正在分析播放",
+            "最常聽的作品", "最常聽的聲優", "根據播放記錄",
+            "收聽時長的", "播放時長", "月的播放",
             // ja（プレイバック）
             "プレイバック", "よく聴いた作品", "よく聴いた声優",
             "再生時間", "再生を分析", "プレイバックをシェア",
             // en
             "Monthly Playback", "Your Playback", "Listening time",
-            "Most listened", "Top works", "Analyzing your",
+            "Most listened", "Top works", "Top voice", "Analyzing your",
             "Share your playback",
             // ko
             "월간 리뷰", "플레이백", "재생 시간",
@@ -4655,15 +4787,43 @@ public final class BgPeel {
             }
         } catch (Throwable ignored) {
         }
+        // ★ v0.2.1：类型页等进页转场时 getLocationInWindow 带位移，壁纸会轻晃；
+        //   lightNav 期间、或与布局坐标偏差过大时，钉死用布局坐标。
+        try {
+            if (PlayPage.lightNav()) {
+                return layoutLocInWindow(v, out);
+            }
+        } catch (Throwable ignored) {
+        }
         int[] geo = RGEO.get();
         boolean geoOk = rootGeometry(v, geo);
+        int[] lay = TMP2.get();
+        boolean layOk = false;
+        try {
+            layOk = layoutLocInWindow(v, lay);
+        } catch (Throwable ignored) {
+        }
         try {
             v.getLocationInWindow(out);
+            if (layOk) {
+                int dx = Math.abs(out[0] - lay[0]);
+                int dy = Math.abs(out[1] - lay[1]);
+                if (dx > 24 || dy > 24) {
+                    out[0] = lay[0];
+                    out[1] = lay[1];
+                    return true;
+                }
+            }
             if (geoOk && locSaneInRoot(out[0], out[1], v.getWidth(), v.getHeight(),
                     geo[0], geo[1])) {
                 return true;
             }
         } catch (Throwable ignored) {
+        }
+        if (layOk) {
+            out[0] = lay[0];
+            out[1] = lay[1];
+            return true;
         }
         return layoutLocInWindow(v, out);
     }
@@ -4923,53 +5083,36 @@ public final class BgPeel {
     }
 
     /**
-     * 顶栏遮罩画布上挖掉搜索钮区域（本地坐标，略放大）。
-     * 遮罩是实心壁纸时，洞里透出下面的搜索钮（它在 Z 序上常被 scrim 压住）。
+     * ★ v0.2.1：不再在顶栏遮罩上挖搜索洞。
+     * <p>挖洞会让媒体库上划的作品文字从透明放大镜背后透出来；
+     * 改为整幅顶栏遮罩挡住列表，搜索钮靠 {@link #elevateLibraryChrome} 抬到遮罩之上。
      */
     static void clipOutSearchChrome(Canvas c, View host) {
+        // 有意留空：兼容旧调用点；真正挖洞已取消。
         if (c == null || host == null) return;
         discoverSearchNear(host);
-        View search = null;
-        try {
-            java.lang.ref.WeakReference<View> wr = sSearchChrome;
-            search = wr == null ? null : wr.get();
-        } catch (Throwable ignored) {
-        }
-        if (search == null || !search.isShown()) return;
-        try {
-            int[] sl = new int[2];
-            int[] hl = LOC.get();
-            search.getLocationInWindow(sl);
-            host.getLocationInWindow(hl);
-            int pad = 6;
-            int l = sl[0] - hl[0] - pad;
-            int t = sl[1] - hl[1] - pad;
-            int r = l + search.getWidth() + pad * 2;
-            int b = t + search.getHeight() + pad * 2;
-            if (r <= l || b <= t) return;
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                c.clipOutRect(l, t, r, b);
-            } else {
-                c.clipRect(l, t, r, b, android.graphics.Region.Op.DIFFERENCE);
-            }
-        } catch (Throwable ignored) {
-        }
     }
 
     /**
-     * ★★★ v0.1.153：顶栏遮罩铺与页面一致的壁纸，并挖掉搜索钮区域。
-     * 替代宿主纯色 / 强调色顶条，同时挡住上划内容穿透；搜索半截靠 clipOut。
+     * ★★★ v0.1.153 / v0.2.1：顶栏遮罩铺与页面一致的壁纸（整幅，不挖洞）。
+     * 替代宿主纯色 / 强调色顶条，挡住上划内容穿透；搜索钮 elevation 置顶。
      */
     static boolean paintTopMask(View v, Canvas c, Rect r) {
         if (v == null || c == null || r == null || r.isEmpty()) return false;
-        Bitmap top = PlayPage.playContext(v) ? PlayPage.playBmp() : sWpBmp;
-        if (top == null || top.isRecycled()) top = sWpBmp;
+        // ★ v0.2.10：顶栏永远用信息控件模糊档（sWpBarBmp），禁止窜用播放页模糊。
+        Bitmap top = sWpBarBmp != null ? sWpBarBmp : sWpBmp;
         if (top == null || top.isRecycled()) return false;
         int save = c.save();
         try {
-            clipOutSearchChrome(c, v);
+            discoverSearchNear(v);
             if (!PanelGlass.paintAligned(c, top, v, r, false)) return false;
             sPainted = true;
+            // 遮罩画完立刻把搜索钮抬到最前，避免仍被 scrim / 列表压住
+            try {
+                View search = sSearchChrome == null ? null : sSearchChrome.get();
+                if (search != null && search.isShown()) elevateLibraryChrome(search);
+            } catch (Throwable ignored) {
+            }
             return true;
         } finally {
             try {
@@ -4985,17 +5128,9 @@ public final class BgPeel {
      */
     static boolean paintBottomMask(View v, Canvas c, Rect r) {
         if (v == null || c == null || r == null || r.isEmpty()) return false;
+        // ★ v0.2.10：底栏 / 迷你条永远用信息控件模糊档；不再用 sPageBmp（常是播放页模糊）。
         Bitmap bar = sWpBarBmp != null ? sWpBarBmp : sWpBmp;
         if (bar == null || bar.isRecycled()) return false;
-        try {
-            int[] loc = LOC.get();
-            v.getLocationInWindow(loc);
-            if (barTop(loc[1]) && sPageBmp != null && !sPageBmp.isRecycled()
-                    && sPageBmp != sWpBmp) {
-                bar = sPageBmp;
-            }
-        } catch (Throwable ignored) {
-        }
         if (!PanelGlass.paintAligned(c, bar, v, r, false)) return false;
         drawMask(c, v, r);
         sPainted = true;

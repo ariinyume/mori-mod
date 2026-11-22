@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -178,12 +179,12 @@ internal fun HomeScreen(
         item { SectionHeader(S.SEC_OPTIMIZE) }
         item {
             ConnectedItems(
-                count = 2,
+                count = 3,
                 modifier = Modifier.padding(horizontal = Space.ScreenH),
             ) { i ->
-                val shape = connectedItemShape(i, 2)
-                if (i == 0) {
-                    MoriListItem(
+                val shape = connectedItemShape(i, 3)
+                when (i) {
+                    0 -> MoriListItem(
                         icon = Icons.Rounded.Bolt,
                         title = S.ITEM_PERF,
                         shape = shape,
@@ -195,8 +196,14 @@ internal fun HomeScreen(
                             )
                         },
                     )
-                } else {
-                    MoriListItem(
+                    1 -> MoriListItem(
+                        icon = Icons.Rounded.Subtitles,
+                        title = S.ITEM_SUBTITLE,
+                        shape = shape,
+                        onClick = { onNavigate(Dest.SUBTITLE) },
+                        showChevron = true,
+                    )
+                    else -> MoriListItem(
                         icon = Icons.AutoMirrored.Rounded.ReceiptLong,
                         title = S.ITEM_LAYOUT,
                         shape = shape,

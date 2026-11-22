@@ -235,16 +235,16 @@ private data class FontLicense(
 private object BundledFontLicense {
     val entries = listOf(
         FontLicense(
-            label = "思源黑体 SC Regular",
-            copyright = "© 2014-2021 Adobe, Reserved Font Name 'Source'",
+            label = "圆构黑体 Geource Sans CHS",
+            copyright = "© 2026 howlingFounts",
             license = "SIL OFL 1.1",
-            source = "github.com/adobe-fonts/source-han-sans",
+            source = "github.com/howlingFounts/GeourceSans",
         ),
         FontLicense(
-            label = "得意黑 Smiley Sans Oblique",
-            copyright = "© 2022–2024 atelierAnchor",
+            label = "普力士 Plix Regular",
+            copyright = "© cathree3 / 虎卅泓 (IBM Plex Sans based)",
             license = "SIL OFL 1.1",
-            source = "github.com/atelier-anchor/smiley-sans",
+            source = "github.com/cathree3/Plix",
         ),
     )
 }

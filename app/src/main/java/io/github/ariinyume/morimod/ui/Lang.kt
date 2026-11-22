@@ -62,6 +62,17 @@ internal abstract class MoriStrings {
     /** 切歌/切轨卡顿优化（实验性）**总开关**：这条线上的所有改动都挂在它下面。 */
     abstract val ITEM_PERF: String
     abstract val ITEM_PERF_SUM: String
+    /** 优化功能入口：字幕调整。 */
+    abstract val ITEM_SUBTITLE: String
+    abstract val F6_TITLE: String
+    /** 字幕调整总开关。 */
+    abstract val F6_ENABLE: String
+    abstract val F6_ENABLE_SUM: String
+    /** 播放页宿主字幕字号（x1.0–1.5）。 */
+    abstract val ITEM_SUBTITLE_SIZE: String
+    abstract val ITEM_SUBTITLE_SIZE_SUM: String
+    abstract val ITEM_SUBTITLE_BG_CLEAR: String
+    abstract val ITEM_SUBTITLE_BG_CLEAR_SUM: String
     abstract val ITEM_HIDE_ICON: String
     abstract val ITEM_DEBUG_LOG: String
     abstract val ITEM_DEBUG_LOG_SUM: String
@@ -77,6 +88,8 @@ internal abstract class MoriStrings {
 
     /** 播放页背景模糊（v0.1.21，取代已删除的「遮罩浓度」）。 */
     abstract val F2_PLAY_BLUR: String
+    /** 信息控件背景模糊（迷你条 / 导航底栏 / 信息面板）。 */
+    abstract val F2_CHROME_BLUR: String
     abstract val F2_ACCENT: String
     abstract val F2_ACCENT_NOTE: String
     abstract val F2_ACCENT_STYLE: String
@@ -263,6 +276,14 @@ internal object ZhCn : MoriStrings() {
     override val ITEM_COVER_BLOCK_SUM = "全页面不显示作品封面，位置仍可点击"
     override val ITEM_PERF = "播放页曲名 / 作品名停止滚动"
     override val ITEM_PERF_SUM = "实验性。播放页曲名和作品名不再滚动"
+    override val ITEM_SUBTITLE = "字幕调整"
+    override val F6_TITLE = "字幕调整"
+    override val F6_ENABLE = "启用字幕调整"
+    override val F6_ENABLE_SUM = "关闭时字幕大小与背景透明均不生效"
+    override val ITEM_SUBTITLE_SIZE = "字幕大小"
+    override val ITEM_SUBTITLE_SIZE_SUM = "播放页宿主字幕字号，范围 ×1.0–1.5"
+    override val ITEM_SUBTITLE_BG_CLEAR = "字幕背景透明"
+    override val ITEM_SUBTITLE_BG_CLEAR_SUM = "打开后字幕条底色透明；关闭则保留紫/强调色底"
     override val ITEM_HIDE_ICON = "隐藏模块桌面图标"
     override val ITEM_DEBUG_LOG = "调试日志"
     override val ITEM_DEBUG_LOG_SUM = "默认关闭，打开后写入 LSPosed 日志"
@@ -273,8 +294,9 @@ internal object ZhCn : MoriStrings() {
     override val F2_TITLE = "主程序背景自定义"
     override val F2_ENABLE = "启用替换"
     override val F2_CARD = "主程序背景替换"
-    override val F2_BLUR = "背景模糊"
+    override val F2_BLUR = "主背景模糊"
     override val F2_PLAY_BLUR = "播放页背景模糊"
+    override val F2_CHROME_BLUR = "信息控件背景模糊"
     override val F2_ACCENT = "强调色跟自定义背景取色"
     override val F2_ACCENT_NOTE = "开启后，宿主里除白色以外的文字与所有阴影蒙层都会跟随壁纸取出的强调色；关掉即还原宿主默认。"
     override val F2_ACCENT_STYLE = "强调色风格"
@@ -311,8 +333,8 @@ internal object ZhCn : MoriStrings() {
     override val F4_CURRENT = "当前字体"
     override val F4_NONE = "（未设置素材）"
     override val F4_SYSTEM_FONTS = "系统字体"
-    override val F4_RISK_NOTE = "改动后如字体显示异常，重启 DLsiteSound 即可正常显示"
-    override val F4_NOTE_NOTO = "DLsiteSound 默认字体为 Noto Sans JP，与 思源黑体 是同一套字形，插件内置的 思源黑体 SC 更聚焦简体中文显示"
+    override val F4_RISK_NOTE = "改动后如字体显示异常，重启DLsiteSound即可正常显示。"
+    override val F4_NOTE_NOTO = "插件内置的字体仅便于简体中文环境阅读，其他语言环境可能出现异体字或缺字。"
     override val F4_MY_FONTS = "用户导入字体"
     override val F4_MY_FONTS_NOTE = "支持 .ttf/.otf：点一项即可换用，长按删除"
     override val F4_MY_FONTS_EMPTY = "还没有导入过字体文件。"
@@ -322,7 +344,7 @@ internal object ZhCn : MoriStrings() {
     override val TOAST_FONT_DELETED = "字体已删除"
     override val F4_BUNDLED = "插件内置字体"
     override val F4_NOOP = "所选字体与宿主默认一致，替换后看不出变化；请换一个字体文件或其它族。"
-    override val F4_BUNDLED_NOTE = "随包内置的两款均为 SIL OFL 1.1：允许商用，也允许随本模块再分发（需保留版权声明与许可证，见「关于 → 内置字体授权」）。钉钉进步体、阿里巴巴普惠体只授权「使用」、不允许再分发字体文件，故未内置，需要时请自行选择文件导入。"
+    override val F4_BUNDLED_NOTE = "随包内置的圆构黑体、普力士均为 SIL OFL 1.1：允许商用，也允许随本模块再分发（需保留版权声明与许可证，见「关于 → 内置字体授权」）。钉钉进步体、阿里巴巴普惠体只授权「使用」、不允许再分发字体文件，故未内置，需要时请自行选择文件导入。"
     override val ABOUT_FONTS = "内置字体授权"
     override val BTN_VIEW_OFL = "查看 OFL 1.1 全文"
     override val F4_PREVIEW = "字体预览"
@@ -341,11 +363,10 @@ internal object ZhCn : MoriStrings() {
     override val ABOUT_LICENSE = "开源许可"
     override val ABOUT_FEEDBACK_SUM = "遇到异常请附上 LSPosed 日志。"
     override val ABOUT_WHY_TITLE = "为什么做 MoriMod？"
-    override val ABOUT_WHY_BODY = "看厌了紫色背景，想要把主页 / 播放页背景换成自己喜欢的图片，以便视觉上完全归于自己。\n\n" +
-        "自带的字体 Noto San JP 在简体中文环境下经常显示字形异常，想要把应用字体换成喜欢的字体并调节字幕显示大小，以便长时间阅读更舒适。\n\n" +
-        "想让界面更精致。\n\n" +
-        "质感、顺手、可控，就是作者制作这个模块的原动力。\n\n" +
-        "最后，感谢你的下载与使用，愿你享受每一段音频。"
+    override val ABOUT_WHY_BODY = "想要把主页/播放页背景换成自己喜欢的图片。\n\n" +
+        "想要把应用字体换成适合阅读的字体。\n\n" +
+        "虽然作者制作这个模块纯粹是为了好玩，但如果能提升你的一点点使用体验我将不胜荣幸。\n\n" +
+        "感谢你的下载与使用，愿你享受每一段音频。"
     override val ABOUT_DISCLAIMER_TITLE = "免责声明"
     override val ABOUT_DISCLAIMER_BODY = "仅供个人学习、研究、测试与自用，不得用于违法违规、侵害他人权益或破坏平台正常服务。\n\n" +
         "本模块由 AI 辅助开发，仅能保证在开发过程中绝不包含人工主观恶意输入与恶意行为；AI 产生的代码可能无法完全符合开发预期，请在使用前自行确认。\n\n" +
@@ -436,6 +457,14 @@ internal object ZhTw : MoriStrings() {
     override val ITEM_COVER_BLOCK_SUM = "全頁面不顯示作品封面，位置仍可點擊"
     override val ITEM_PERF = "播放頁曲名 / 作品名停止滾動"
     override val ITEM_PERF_SUM = "實驗性。播放頁曲名和作品名不再滾動"
+    override val ITEM_SUBTITLE = "字幕調整"
+    override val F6_TITLE = "字幕調整"
+    override val F6_ENABLE = "啟用字幕調整"
+    override val F6_ENABLE_SUM = "關閉時字幕大小與背景透明均不生效"
+    override val ITEM_SUBTITLE_SIZE = "字幕大小"
+    override val ITEM_SUBTITLE_SIZE_SUM = "播放頁宿主字幕字號，範圍 ×1.0–1.5"
+    override val ITEM_SUBTITLE_BG_CLEAR = "字幕背景透明"
+    override val ITEM_SUBTITLE_BG_CLEAR_SUM = "開啟後字幕條底色透明；關閉則保留紫／強調色底"
     override val ITEM_HIDE_ICON = "隱藏模組桌面圖示"
     override val ITEM_DEBUG_LOG = "除錯日誌"
     override val ITEM_DEBUG_LOG_SUM = "預設關閉，開啟後寫入 LSPosed 日誌"
@@ -446,8 +475,9 @@ internal object ZhTw : MoriStrings() {
     override val F2_TITLE = "主程式背景自訂"
     override val F2_ENABLE = "啟用替換"
     override val F2_CARD = "主程式背景替換"
-    override val F2_BLUR = "背景模糊"
+    override val F2_BLUR = "主背景模糊"
     override val F2_PLAY_BLUR = "播放頁背景模糊"
+    override val F2_CHROME_BLUR = "資訊控件背景模糊"
     override val F2_ACCENT = "強調色跟自訂背景取色"
     override val F2_ACCENT_NOTE = "開啟後，宿主裡除白色以外的文字與所有陰影蒙層都會跟隨壁紙取出的強調色；關掉即還原宿主預設。"
     override val F2_ACCENT_STYLE = "強調色風格"
@@ -484,8 +514,8 @@ internal object ZhTw : MoriStrings() {
     override val F4_CURRENT = "目前字型"
     override val F4_NONE = "（未設定素材）"
     override val F4_SYSTEM_FONTS = "系統字型"
-    override val F4_RISK_NOTE = "改動後如字型顯示異常，重新啟動 DLsiteSound 即可正常顯示"
-    override val F4_NOTE_NOTO = "DLsiteSound 預設字型為 Noto Sans JP，與 思源黑體 是同一套字形，外掛內建的 思源黑體 SC 更聚焦簡體中文顯示"
+    override val F4_RISK_NOTE = "改動後如字型顯示異常，重新啟動 DLsiteSound 即可正常顯示。"
+    override val F4_NOTE_NOTO = "外掛內建字型僅便於簡體中文環境閱讀，其他語言環境可能出現異體字或缺字。"
     override val F4_MY_FONTS = "使用者匯入字型"
     override val F4_MY_FONTS_NOTE = "支援 .ttf/.otf：點一項即可換用，長按刪除"
     override val F4_MY_FONTS_EMPTY = "還沒有匯入過字型檔。"
@@ -495,7 +525,7 @@ internal object ZhTw : MoriStrings() {
     override val TOAST_FONT_DELETED = "字型已刪除"
     override val F4_BUNDLED = "外掛內建字型"
     override val F4_NOOP = "所選字型與宿主預設一致，替換後看不出變化；請換一個字型檔或其它族。"
-    override val F4_BUNDLED_NOTE = "隨包內建的兩款皆為 SIL OFL 1.1：允許商用，也允許隨本模組再分發（需保留版權聲明與授權條款，見「關於 → 內建字型授權」）。釘釘進步體、阿里巴巴普惠體僅授權「使用」、不允許再分發字型檔，故未內建，需要時請自行選擇檔案匯入。"
+    override val F4_BUNDLED_NOTE = "隨包內建的圓構黑體、普力士皆為 SIL OFL 1.1：允許商用，也允許隨本模組再分發（需保留版權聲明與授權條款，見「關於 → 內建字型授權」）。釘釘進步體、阿里巴巴普惠體僅授權「使用」、不允許再分發字型檔，故未內建，需要時請自行選擇檔案匯入。"
     override val ABOUT_FONTS = "內建字型授權"
     override val BTN_VIEW_OFL = "檢視 OFL 1.1 全文"
     override val F4_PREVIEW = "字型預覽"
@@ -514,11 +544,10 @@ internal object ZhTw : MoriStrings() {
     override val ABOUT_LICENSE = "開源授權"
     override val ABOUT_FEEDBACK_SUM = "遇到異常請附上 LSPosed 日誌。"
     override val ABOUT_WHY_TITLE = "為什麼做 MoriMod？"
-    override val ABOUT_WHY_BODY = "看膩了紫色背景，想要把主頁 / 播放頁背景換成自己喜歡的圖片，以便視覺上完全歸於自己。\n\n" +
-        "內建的字型 Noto San JP 在簡體中文環境下經常顯示字形異常，想要把應用字型換成喜歡的字型並調節字幕顯示大小，以便長時間閱讀更舒適。\n\n" +
-        "想讓介面更精緻。\n\n" +
-        "質感、順手、可控，就是作者製作這個模組的原動力。\n\n" +
-        "最後，感謝你的下載與使用，願你享受每一段音訊。"
+    override val ABOUT_WHY_BODY = "想要把主頁／播放頁背景換成自己喜歡的圖片。\n\n" +
+        "想要把應用字型換成適合閱讀的字型。\n\n" +
+        "雖然作者製作這個模組純粹是為了好玩，但如果能提升你的一點點使用體驗我將不勝榮幸。\n\n" +
+        "感謝你的下載與使用，願你享受每一段音訊。"
     override val ABOUT_DISCLAIMER_TITLE = "免責聲明"
     override val ABOUT_DISCLAIMER_BODY = "僅供個人學習、研究、測試與自用，不得用於違法違規、侵害他人權益或破壞平台正常服務。\n\n" +
         "本模組由 AI 輔助開發，僅能保證在開發過程中絕不包含人工主觀惡意輸入與惡意行為；AI 產生的程式碼可能無法完全符合開發預期，請在使用前自行確認。\n\n" +
@@ -609,6 +638,14 @@ internal object En : MoriStrings() {
     override val ITEM_COVER_BLOCK_SUM = "Hide cover art everywhere; the area stays tappable"
     override val ITEM_PERF = "Stop title scrolling"
     override val ITEM_PERF_SUM = "Experimental. Track and work titles stay still on the player"
+    override val ITEM_SUBTITLE = "Subtitles"
+    override val F6_TITLE = "Subtitle settings"
+    override val F6_ENABLE = "Enable subtitle adjustments"
+    override val F6_ENABLE_SUM = "When off, size and background transparency do nothing"
+    override val ITEM_SUBTITLE_SIZE = "Subtitle size"
+    override val ITEM_SUBTITLE_SIZE_SUM = "Host player subtitle scale, ×1.0–1.5"
+    override val ITEM_SUBTITLE_BG_CLEAR = "Transparent subtitle background"
+    override val ITEM_SUBTITLE_BG_CLEAR_SUM = "On: clear the bar behind subtitles. Off: keep purple/accent bar"
     override val ITEM_HIDE_ICON = "Hide launcher icon"
     override val ITEM_DEBUG_LOG = "Debug log"
     override val ITEM_DEBUG_LOG_SUM = "Off by default; writes to the LSPosed log"
@@ -619,8 +656,9 @@ internal object En : MoriStrings() {
     override val F2_TITLE = "App background"
     override val F2_ENABLE = "Enable"
     override val F2_CARD = "App background replacement"
-    override val F2_BLUR = "Background blur"
+    override val F2_BLUR = "Main background blur"
     override val F2_PLAY_BLUR = "Player background blur"
+    override val F2_CHROME_BLUR = "Info chrome blur"
     override val F2_ACCENT = "Accent from wallpaper"
     override val F2_ACCENT_NOTE = "Tints every non-white text and all shadow overlays in the host with an accent colour extracted from your wallpaper. Turn off to restore the host defaults."
     override val F2_ACCENT_STYLE = "Accent style"
@@ -658,8 +696,8 @@ internal object En : MoriStrings() {
     override val F4_CURRENT = "Current font"
     override val F4_NONE = "(not set)"
     override val F4_SYSTEM_FONTS = "System fonts"
-    override val F4_RISK_NOTE = "If text looks wrong afterwards, restart DLsiteSound"
-    override val F4_NOTE_NOTO = "DLsiteSound ships Noto Sans JP (the same typeface family as Source Han Sans); the bundled Source Han Sans SC focuses on Simplified Chinese glyphs"
+    override val F4_RISK_NOTE = "If text looks wrong afterwards, restart DLsiteSound to restore normal display."
+    override val F4_NOTE_NOTO = "Bundled fonts are tuned for Simplified Chinese reading; other locales may show variant glyphs or missing characters."
     override val F4_MY_FONTS = "My fonts"
     override val F4_MY_FONTS_NOTE = "Import a font file with the button below (.ttf / .otf only). Tap an item to apply it; long-press to delete."
     override val F4_MY_FONTS_EMPTY = "No imported font files yet."
@@ -688,11 +726,10 @@ internal object En : MoriStrings() {
     override val ABOUT_LICENSE = "License"
     override val ABOUT_FEEDBACK_SUM = "Please attach the LSPosed log when reporting issues."
     override val ABOUT_WHY_TITLE = "Why MoriMod?"
-    override val ABOUT_WHY_BODY = "I got tired of the purple background and wanted to replace the home / player background with images I actually like, so the app feels entirely mine.\n\n" +
-        "The bundled font Noto San JP often renders broken glyphs in a Simplified Chinese environment, so I wanted to swap in a font I like and adjust the subtitle size for comfortable long listening sessions.\n\n" +
-        "I wanted the interface to feel more refined.\n\n" +
-        "Texture, fluency, control - that is what drives this module.\n\n" +
-        "Finally, thank you for downloading and using it. Enjoy every audio you listen to."
+    override val ABOUT_WHY_BODY = "I wanted to replace the home / player background with images I like.\n\n" +
+        "I wanted a typeface that is comfortable to read.\n\n" +
+        "This module was made just for fun — if it improves your experience even a little, I would be delighted.\n\n" +
+        "Thank you for downloading and using it. Enjoy every track."
     override val ABOUT_DISCLAIMER_TITLE = "Disclaimer"
     override val ABOUT_DISCLAIMER_BODY = "For personal study, research, testing and private use only. Do not use it for anything illegal, for infringing the rights of others, or for disrupting the platform's normal service.\n\n" +
         "This module is AI-assisted. It is only guaranteed that no deliberate malicious input or malicious behaviour by a human was included during development; AI-generated code may not fully match the intent, so please verify before use.\n\n" +
@@ -782,6 +819,14 @@ internal object Ja : MoriStrings() {
     override val ITEM_COVER_BLOCK_SUM = "全画面で作品カバーを非表示（タップは可能）"
     override val ITEM_PERF = "曲名・作品名のスクロールを停止"
     override val ITEM_PERF_SUM = "実験的。再生画面の曲名・作品名を固定"
+    override val ITEM_SUBTITLE = "字幕調整"
+    override val F6_TITLE = "字幕調整"
+    override val F6_ENABLE = "字幕調整を有効化"
+    override val F6_ENABLE_SUM = "オフのとき字幕サイズと背景透明は効きません"
+    override val ITEM_SUBTITLE_SIZE = "字幕サイズ"
+    override val ITEM_SUBTITLE_SIZE_SUM = "再生画面の字幕倍率、×1.0–1.5"
+    override val ITEM_SUBTITLE_BG_CLEAR = "字幕背景を透明に"
+    override val ITEM_SUBTITLE_BG_CLEAR_SUM = "オンで字幕バーの地色を消す。オフで紫／アクセント色の地を残す"
     override val ITEM_HIDE_ICON = "ランチャーアイコンを非表示"
     override val ITEM_DEBUG_LOG = "デバッグログ"
     override val ITEM_DEBUG_LOG_SUM = "既定オフ。LSPosedログに出力"
@@ -792,8 +837,9 @@ internal object Ja : MoriStrings() {
     override val F2_TITLE = "アプリ背景"
     override val F2_ENABLE = "有効化"
     override val F2_CARD = "アプリ背景の差し替え"
-    override val F2_BLUR = "背景ぼかし"
+    override val F2_BLUR = "メイン背景ぼかし"
     override val F2_PLAY_BLUR = "再生画面の背景ぼかし"
+    override val F2_CHROME_BLUR = "情報UI背景ぼかし"
     override val F2_ACCENT = "壁紙からアクセント色"
     override val F2_ACCENT_NOTE = "Tints every non-white text and all shadow overlays in the host with an accent colour extracted from your wallpaper. Turn off to restore the host defaults."
     override val F2_ACCENT_STYLE = "Accent style"
@@ -831,8 +877,8 @@ internal object Ja : MoriStrings() {
     override val F4_CURRENT = "現在のフォント"
     override val F4_NONE = "（未設定）"
     override val F4_SYSTEM_FONTS = "システムフォント"
-    override val F4_RISK_NOTE = "If text looks wrong afterwards, restart DLsiteSound"
-    override val F4_NOTE_NOTO = "DLsiteSound ships Noto Sans JP (the same typeface family as Source Han Sans); the bundled Source Han Sans SC focuses on Simplified Chinese glyphs"
+    override val F4_RISK_NOTE = "表示がおかしくなったら DLsiteSound を再起動してください。"
+    override val F4_NOTE_NOTO = "同梱フォントは簡体字中国語向けです。他言語では異体字や欠字が出ることがあります。"
     override val F4_MY_FONTS = "My fonts"
     override val F4_MY_FONTS_NOTE = "Import a font file with the button below (.ttf / .otf only). Tap an item to apply it; long-press to delete."
     override val F4_MY_FONTS_EMPTY = "No imported font files yet."
@@ -843,39 +889,38 @@ internal object Ja : MoriStrings() {
     override val F4_BUNDLED = "Bundled fonts"
     override val F4_NOOP = "That font matches the host default, so nothing will change. Pick another file or family."
     override val F4_BUNDLED_NOTE = "Both bundled fonts are SIL OFL 1.1: commercial use is allowed, and so is redistribution together with this module (keep the copyright notice and license — see About → Bundled font licenses). DingTalk JinBuTi and Alibaba PuHuiTi grant usage only, not redistribution of the font files, so they are not bundled; import them manually if needed."
-    override val ABOUT_FONTS = "Bundled font licenses"
-    override val BTN_VIEW_OFL = "View full OFL 1.1"
-    override val F4_PREVIEW = "Preview"
+    override val ABOUT_FONTS = "同梱フォントのライセンス"
+    override val BTN_VIEW_OFL = "OFL 1.1 全文を見る"
+    override val F4_PREVIEW = "プレビュー"
 
     override val ABOUT_TITLE = "情報"
-    override val ABOUT_SUBTITLE = "DLsiteSound experience enhancer"
-    override val ABOUT_VERSION = "Module version"
-    override val ABOUT_CODE = "Build"
-    override val ABOUT_PACKAGE = "Package"
-    override val ABOUT_HOST = "Host package"
-    override val ABOUT_HOST_VERSION = "Host version"
-    override val ABOUT_HOST_NOT_INSTALLED = "Not installed"
-    override val ABOUT_COLOR_SOURCE = "Color source"
-    override val ABOUT_COLOR_DYNAMIC = "System dynamic color"
-    override val ABOUT_COLOR_FALLBACK = "Built-in Mono fallback"
-    override val ABOUT_LICENSE = "License"
-    override val ABOUT_FEEDBACK_SUM = "Please attach the LSPosed log when reporting issues."
-    override val ABOUT_WHY_TITLE = "Why MoriMod?"
-    override val ABOUT_WHY_BODY = "I got tired of the purple background and wanted to replace the home / player background with images I actually like, so the app feels entirely mine.\n\n" +
-        "The bundled font Noto San JP often renders broken glyphs in a Simplified Chinese environment, so I wanted to swap in a font I like and adjust the subtitle size for comfortable long listening sessions.\n\n" +
-        "I wanted the interface to feel more refined.\n\n" +
-        "Texture, fluency, control - that is what drives this module.\n\n" +
-        "Finally, thank you for downloading and using it. Enjoy every audio you listen to."
-    override val ABOUT_DISCLAIMER_TITLE = "Disclaimer"
-    override val ABOUT_DISCLAIMER_BODY = "For personal study, research, testing and private use only. Do not use it for anything illegal, for infringing the rights of others, or for disrupting the platform's normal service.\n\n" +
-        "This module is AI-assisted. It is only guaranteed that no deliberate malicious input or malicious behaviour by a human was included during development; AI-generated code may not fully match the intent, so please verify before use.\n\n" +
-        "This is an independently developed third-party tool. It has no affiliation or partnership with DLsiteSound (eisys Inc.) or any phone manufacturer.\n\n" +
-        "Using this module requires Root and an Xposed framework. It may void the warranty of some devices or violate the security policy of some ROMs, and may cause instability, loss of warranty or security risks. You bear all such risks.\n\n" +
-        "Third-party modules may cause account anomalies, device instability or data loss at runtime. Back up important data first and test with non-critical accounts and scenarios.\n\n" +
-        "Continued use means you acknowledge the risks above. If you do not agree, stop using it and uninstall the module."
-    override val ABOUT_REPO_TITLE = "Project"
-    override val BTN_OPEN_REPO = "Open"
-    override val BTN_COPY_LINK = "Copy link"
+    override val ABOUT_SUBTITLE = "DLsiteSound 体験強化モジュール"
+    override val ABOUT_VERSION = "モジュール版"
+    override val ABOUT_CODE = "ビルド番号"
+    override val ABOUT_PACKAGE = "パッケージ名"
+    override val ABOUT_HOST = "ホストパッケージ"
+    override val ABOUT_HOST_VERSION = "ホスト版"
+    override val ABOUT_HOST_NOT_INSTALLED = "未インストール"
+    override val ABOUT_COLOR_SOURCE = "配色の出典"
+    override val ABOUT_COLOR_DYNAMIC = "システムダイナミックカラー"
+    override val ABOUT_COLOR_FALLBACK = "内蔵 Mono フォールバック"
+    override val ABOUT_LICENSE = "ライセンス"
+    override val ABOUT_FEEDBACK_SUM = "不具合報告時は LSPosed ログを添付してください。"
+    override val ABOUT_WHY_TITLE = "なぜ MoriMod を作ったのか？"
+    override val ABOUT_WHY_BODY = "ホーム／再生画面の背景を、好きな画像に差し替えたかった。\n\n" +
+        "読みやすいフォントに差し替えたかった。\n\n" +
+        "作者は純粋に楽しむために作っていますが、少しでも体験が良くなれば嬉しいです。\n\n" +
+        "ダウンロードとご利用に感謝します。すべての音声を楽しんでください。"
+    override val ABOUT_DISCLAIMER_TITLE = "免責事項"
+    override val ABOUT_DISCLAIMER_BODY = "個人の学習・研究・テスト・自用のみを目的とし、違法行為や他人の権利侵害、プラットフォームの正常なサービス妨害には用いないでください。\n\n" +
+        "本モジュールは AI 支援で開発されています。開発過程で人為的な悪意入力・悪意行為を含めないことのみ保証し、AI 生成コードが意図と完全一致するとは限りません。使用前にご自身で確認してください。\n\n" +
+        "本モジュールは独立開発のサードパーティツールであり、DLsiteSound（eisys 株式会社）および各端末メーカーと一切の所属・提携関係はありません。\n\n" +
+        "利用には Root と Xposed フレームワークが必要で、一部端末の保証条項や ROM のセキュリティ方針に抵触する可能性があり、不安定化・保証失効・セキュリティリスクなどを招くことがあります。リスクは利用者自身が負担します。\n\n" +
+        "サードパーティ改変モジュールはアカウント異常・端末不安定・データ損失などを招くことがあります。重要データをバックアップし、非重要アカウント／非重要場面で先にテストしてください。\n\n" +
+        "継続利用は上記リスクを了承したものとみなします。同意しない場合は使用を停止し、モジュールをアンインストールしてください。"
+    override val ABOUT_REPO_TITLE = "プロジェクト"
+    override val BTN_OPEN_REPO = "開く"
+    override val BTN_COPY_LINK = "リンクをコピー"
 
     override val COMMON_ENABLE = "有効化"
     override val BTN_RESTORE = "Restore"
@@ -956,6 +1001,14 @@ internal object Ko : MoriStrings() {
     override val ITEM_COVER_BLOCK_SUM = "모든 화면에서 커버 숨김(탭은 가능)"
     override val ITEM_PERF = "곡명/작품명 스크롤 중지"
     override val ITEM_PERF_SUM = "실험적. 재생 화면 곡명·작품명 고정"
+    override val ITEM_SUBTITLE = "자막 조정"
+    override val F6_TITLE = "자막 조정"
+    override val F6_ENABLE = "자막 조정 사용"
+    override val F6_ENABLE_SUM = "끄면 자막 크기와 배경 투명이 적용되지 않습니다"
+    override val ITEM_SUBTITLE_SIZE = "자막 크기"
+    override val ITEM_SUBTITLE_SIZE_SUM = "재생 화면 자막 배율, ×1.0–1.5"
+    override val ITEM_SUBTITLE_BG_CLEAR = "자막 배경 투명"
+    override val ITEM_SUBTITLE_BG_CLEAR_SUM = "켜면 자막 바 배경이 투명해지고, 끄면 보라/강조색 배경을 유지합니다"
     override val ITEM_HIDE_ICON = "런처 아이콘 숨기기"
     override val ITEM_DEBUG_LOG = "디버그 로그"
     override val ITEM_DEBUG_LOG_SUM = "기본 꺼짐. LSPosed 로그에 기록"
@@ -966,8 +1019,9 @@ internal object Ko : MoriStrings() {
     override val F2_TITLE = "앱 배경"
     override val F2_ENABLE = "사용"
     override val F2_CARD = "앱 배경 바꾸기"
-    override val F2_BLUR = "배경 흐림"
+    override val F2_BLUR = "메인 배경 흐림"
     override val F2_PLAY_BLUR = "재생 화면 배경 흐림"
+    override val F2_CHROME_BLUR = "정보 UI 배경 흐림"
     override val F2_ACCENT = "벽지에서 강조색"
     override val F2_ACCENT_NOTE = "Tints every non-white text and all shadow overlays in the host with an accent colour extracted from your wallpaper. Turn off to restore the host defaults."
     override val F2_ACCENT_STYLE = "Accent style"
@@ -1005,8 +1059,8 @@ internal object Ko : MoriStrings() {
     override val F4_CURRENT = "현재 글꼴"
     override val F4_NONE = "(설정 안 됨)"
     override val F4_SYSTEM_FONTS = "시스템 글꼴"
-    override val F4_RISK_NOTE = "If text looks wrong afterwards, restart DLsiteSound"
-    override val F4_NOTE_NOTO = "DLsiteSound ships Noto Sans JP (the same typeface family as Source Han Sans); the bundled Source Han Sans SC focuses on Simplified Chinese glyphs"
+    override val F4_RISK_NOTE = "표시가 이상하면 DLsiteSound를 다시 시작하면 정상으로 돌아갑니다."
+    override val F4_NOTE_NOTO = "내장 글꼴은 간체 중국어 환경에 맞춰져 있으며, 다른 언어에서는 이체자나 결자가 나타날 수 있습니다."
     override val F4_MY_FONTS = "My fonts"
     override val F4_MY_FONTS_NOTE = "Import a font file with the button below (.ttf / .otf only). Tap an item to apply it; long-press to delete."
     override val F4_MY_FONTS_EMPTY = "No imported font files yet."
@@ -1017,39 +1071,38 @@ internal object Ko : MoriStrings() {
     override val F4_BUNDLED = "Bundled fonts"
     override val F4_NOOP = "That font matches the host default, so nothing will change. Pick another file or family."
     override val F4_BUNDLED_NOTE = "Both bundled fonts are SIL OFL 1.1: commercial use is allowed, and so is redistribution together with this module (keep the copyright notice and license — see About → Bundled font licenses). DingTalk JinBuTi and Alibaba PuHuiTi grant usage only, not redistribution of the font files, so they are not bundled; import them manually if needed."
-    override val ABOUT_FONTS = "Bundled font licenses"
-    override val BTN_VIEW_OFL = "View full OFL 1.1"
-    override val F4_PREVIEW = "Preview"
+    override val ABOUT_FONTS = "내장 글꼴 라이선스"
+    override val BTN_VIEW_OFL = "OFL 1.1 전문 보기"
+    override val F4_PREVIEW = "미리보기"
 
     override val ABOUT_TITLE = "정보"
-    override val ABOUT_SUBTITLE = "DLsiteSound experience enhancer"
-    override val ABOUT_VERSION = "Module version"
-    override val ABOUT_CODE = "Build"
-    override val ABOUT_PACKAGE = "Package"
-    override val ABOUT_HOST = "Host package"
-    override val ABOUT_HOST_VERSION = "Host version"
-    override val ABOUT_HOST_NOT_INSTALLED = "Not installed"
-    override val ABOUT_COLOR_SOURCE = "Color source"
-    override val ABOUT_COLOR_DYNAMIC = "System dynamic color"
-    override val ABOUT_COLOR_FALLBACK = "Built-in Mono fallback"
-    override val ABOUT_LICENSE = "License"
-    override val ABOUT_FEEDBACK_SUM = "Please attach the LSPosed log when reporting issues."
-    override val ABOUT_WHY_TITLE = "Why MoriMod?"
-    override val ABOUT_WHY_BODY = "I got tired of the purple background and wanted to replace the home / player background with images I actually like, so the app feels entirely mine.\n\n" +
-        "The bundled font Noto San JP often renders broken glyphs in a Simplified Chinese environment, so I wanted to swap in a font I like and adjust the subtitle size for comfortable long listening sessions.\n\n" +
-        "I wanted the interface to feel more refined.\n\n" +
-        "Texture, fluency, control - that is what drives this module.\n\n" +
-        "Finally, thank you for downloading and using it. Enjoy every audio you listen to."
-    override val ABOUT_DISCLAIMER_TITLE = "Disclaimer"
-    override val ABOUT_DISCLAIMER_BODY = "For personal study, research, testing and private use only. Do not use it for anything illegal, for infringing the rights of others, or for disrupting the platform's normal service.\n\n" +
-        "This module is AI-assisted. It is only guaranteed that no deliberate malicious input or malicious behaviour by a human was included during development; AI-generated code may not fully match the intent, so please verify before use.\n\n" +
-        "This is an independently developed third-party tool. It has no affiliation or partnership with DLsiteSound (eisys Inc.) or any phone manufacturer.\n\n" +
-        "Using this module requires Root and an Xposed framework. It may void the warranty of some devices or violate the security policy of some ROMs, and may cause instability, loss of warranty or security risks. You bear all such risks.\n\n" +
-        "Third-party modules may cause account anomalies, device instability or data loss at runtime. Back up important data first and test with non-critical accounts and scenarios.\n\n" +
-        "Continued use means you acknowledge the risks above. If you do not agree, stop using it and uninstall the module."
-    override val ABOUT_REPO_TITLE = "Project"
-    override val BTN_OPEN_REPO = "Open"
-    override val BTN_COPY_LINK = "Copy link"
+    override val ABOUT_SUBTITLE = "DLsiteSound 경험 향상 모듈"
+    override val ABOUT_VERSION = "모듈 버전"
+    override val ABOUT_CODE = "빌드 번호"
+    override val ABOUT_PACKAGE = "패키지 이름"
+    override val ABOUT_HOST = "호스트 패키지"
+    override val ABOUT_HOST_VERSION = "호스트 버전"
+    override val ABOUT_HOST_NOT_INSTALLED = "미설치"
+    override val ABOUT_COLOR_SOURCE = "배색 출처"
+    override val ABOUT_COLOR_DYNAMIC = "시스템 다이나믹 컬러"
+    override val ABOUT_COLOR_FALLBACK = "내장 Mono 대체 배색"
+    override val ABOUT_LICENSE = "라이선스"
+    override val ABOUT_FEEDBACK_SUM = "문제 제보 시 LSPosed 로그를 첨부해 주세요."
+    override val ABOUT_WHY_TITLE = "왜 MoriMod를 만들었나요?"
+    override val ABOUT_WHY_BODY = "홈/재생 화면 배경을 내가 좋아하는 이미지로 바꾸고 싶었습니다.\n\n" +
+        "읽기 편한 글꼴로 바꾸고 싶었습니다.\n\n" +
+        "작가는 순전히 재미로 만들었지만, 사용 경험이 조금이나마 나아진다면 기쁠 것입니다.\n\n" +
+        "다운로드와 이용에 감사드리며, 모든 오디오를 즐기시길 바랍니다."
+    override val ABOUT_DISCLAIMER_TITLE = "면책 조항"
+    override val ABOUT_DISCLAIMER_BODY = "개인 학습·연구·테스트·자용 목적으로만 사용하며, 위법 행위나 타인 권리 침해, 플랫폼 정상 서비스 방해에는 사용하지 마세요.\n\n" +
+        "본 모듈은 AI 보조로 개발되었습니다. 개발 과정에서 인위적 악의 입력·악의 행위가 포함되지 않았음만 보장하며, AI 생성 코드가 의도와 완전히 일치한다고 보장하지 않습니다. 사용 전 직접 확인해 주세요.\n\n" +
+        "본 모듈은 독립 개발된 서드파티 도구이며, DLsiteSound(eisys 주식회사) 및 각 단말기 제조사와 어떠한 소속·제휴 관계도 없습니다.\n\n" +
+        "사용에는 Root와 Xposed 프레임워크가 필요하며, 일부 기기 보증 조항이나 ROM 보안 정책에 위배될 수 있고, 불안정·보증 상실·보안 위험 등을 초래할 수 있습니다. 위험은 사용자 본인이 부담합니다.\n\n" +
+        "서드파티 개조 모듈은 계정 이상·기기 불안정·데이터 손실 등을 초래할 수 있습니다. 중요 데이터를 백업하고, 비중요 계정/비중요 상황에서 먼저 테스트하세요.\n\n" +
+        "계속 사용하면 위 위험을 인지한 것으로 간주합니다. 동의하지 않으면 사용을 중단하고 모듈을 제거하세요."
+    override val ABOUT_REPO_TITLE = "프로젝트"
+    override val BTN_OPEN_REPO = "열기"
+    override val BTN_COPY_LINK = "링크 복사"
 
     override val COMMON_ENABLE = "사용"
     override val BTN_RESTORE = "Restore"

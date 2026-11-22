@@ -90,8 +90,8 @@ final class CoverLayer {
 
 
     static boolean bfsMonthlyCue(View v, int depth, int visited) {
-        // 月度回顾文案实测在 Dialog 树深度 ~18；6 层会漏掉「分享月度 / 最常听」。
-        if (v == null || depth > 22 || visited > 160) return false;
+        // 月度回顾文案实测在 Dialog 树深度 ~18；主窗更深。v0.2.6 放宽避免「有 cue 却未确认」。
+        if (v == null || depth > 28 || visited > 360) return false;
         if (cueHit(v, BgPeel.MONTHLY_REVIEW_CUES)) return true;
         if (!(v instanceof ViewGroup)) return false;
         ViewGroup g = (ViewGroup) v;

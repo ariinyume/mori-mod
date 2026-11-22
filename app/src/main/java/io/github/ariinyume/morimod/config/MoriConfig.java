@@ -73,7 +73,7 @@ public final class MoriConfig {
     public int f2MaskAlpha = 0;
 
     /**
-     * 播放页背景模糊 0–100（v0.1.21）。
+     * 播放页背景模糊 0–50（v0.1.21；v0.2.10 上限收至 50）。
      *
      * <h3>为什么要单开一个档位</h3>
      * 播放页（{@code playbackspbackground}，1081×1920 RGBA）是宿主自己那张「已经糊过的
@@ -82,6 +82,13 @@ public final class MoriConfig {
      * 与全局 {@link #f2Blur} 叠加（先按 f2Blur 糊一次，再按本字段糊一次）。
      */
     public int f2PlayBlur = 0;
+
+    /**
+     * 信息控件背景模糊 0–50（v0.2.10）。
+     * <p>迷你播放条、导航底栏、信息面板毛玻璃等原先写死 20% 的档位；
+     * 与主背景 / 播放页模糊独立。
+     */
+    public int f2ChromeBlur = 20;
 
     /**
      * 强调色跟自定义背景取色（v0.1.22）。
@@ -139,7 +146,7 @@ public final class MoriConfig {
     // ★ r112：`f2DesktopWall`（桌面壁纸）已按用户要求整条移除。
 
     /**
-     * 背景模糊强度 0–100（v0.1.6）。
+     * 主背景模糊强度 0–50（v0.1.6；v0.2.10 上限由 100 收至 50）。
      *
      * <p>为什么用户要它：宿主自己在背景上叠了一层全屏渐变/遮罩，把那层挡住之后
      * 壁纸会「太清楚、抢内容」—— 于是需要自己控制模糊程度，而不是全靠宿主决定。
@@ -235,6 +242,22 @@ public final class MoriConfig {
      */
     public boolean perfSwitch = false;
 
+    /**
+     * 字幕调整总开关（v0.2.10）。关 = 字号/背景透明均不生效。
+     */
+    public boolean f6Enabled = false;
+
+    /**
+     * 播放页宿主字幕字号倍率（字幕调整页）。
+     * <p>1.0 = 宿主默认；上限 1.5；步进 0.1（见 {@link #clamp()}）。
+     */
+    public float f6SubtitleScale = 1.0f;
+
+    /**
+     * 字幕背景透明：true = 隐藏宿主字幕条底色；false = 保留紫/强调色底。
+     */
+    public boolean f6SubtitleBgTransparent = false;
+
     // ── 界面偏好 ─────────────────────────────────────────────────────
     /** 设置页语言：zh-CN | zh-TW | en。 */
     public String lang = "zh-CN";
@@ -290,6 +313,7 @@ public final class MoriConfig {
         c.f2Transparent = f2Transparent;
         c.f2Blur = f2Blur;
         c.f2PlayBlur = f2PlayBlur;
+        c.f2ChromeBlur = f2ChromeBlur;
         c.f2Accent = f2Accent;
         c.f2AccentStyle = f2AccentStyle;
         c.f2PageAlpha = f2PageAlpha;
@@ -306,6 +330,9 @@ public final class MoriConfig {
             c.f5Modules.add(n);
         }
         c.perfSwitch = perfSwitch;
+        c.f6Enabled = f6Enabled;
+        c.f6SubtitleScale = f6SubtitleScale;
+        c.f6SubtitleBgTransparent = f6SubtitleBgTransparent;
         c.lang = lang; c.hideLauncherIcon = hideLauncherIcon;
         c.debugLog = debugLog;
         c.activeProfileId = activeProfileId;
@@ -332,11 +359,14 @@ public final class MoriConfig {
         //   钉死 0，旧配置也不会留下「窗口层比页面暗一档」的错位。
         f2MaskAlpha = 0;
         if (f2Blur < 0) f2Blur = 0;
-        if (f2Blur > 100) f2Blur = 100;
-        f2Blur = ((f2Blur + 2) / 5) * 5;   // v0.1.149：5% 步进
+        if (f2Blur > 50) f2Blur = 50;
+        f2Blur = ((f2Blur + 2) / 5) * 5;   // v0.2.10：0–50，5% 步进
         if (f2PlayBlur < 0) f2PlayBlur = 0;
-        if (f2PlayBlur > 100) f2PlayBlur = 100;
+        if (f2PlayBlur > 50) f2PlayBlur = 50;
         f2PlayBlur = ((f2PlayBlur + 2) / 5) * 5;
+        if (f2ChromeBlur < 0) f2ChromeBlur = 0;
+        if (f2ChromeBlur > 50) f2ChromeBlur = 50;
+        f2ChromeBlur = ((f2ChromeBlur + 2) / 5) * 5;
         if (!validAccentStyle(f2AccentStyle)) {
             f2AccentStyle = "TonalSpot";
         }
@@ -366,6 +396,10 @@ public final class MoriConfig {
         f1Cover = true;
         f1Title = false;
         f1Artist = false;
+        // F6 字幕倍率：1.0–1.5，步进 0.1
+        if (f6SubtitleScale < 1.0f) f6SubtitleScale = 1.0f;
+        if (f6SubtitleScale > 1.5f) f6SubtitleScale = 1.5f;
+        f6SubtitleScale = Math.round(f6SubtitleScale * 10f) / 10f;
     }
 
     /**
@@ -440,6 +474,7 @@ public final class MoriConfig {
             o.put("f2Transparent", f2Transparent);
                 o.put("f2Blur", f2Blur);
             o.put("f2PlayBlur", f2PlayBlur);
+            o.put("f2ChromeBlur", f2ChromeBlur);
             o.put("f2Accent", f2Accent);
             o.put("f2AccentStyle", f2AccentStyle);
             o.put("f2PageAlpha", f2PageAlpha);
@@ -460,6 +495,9 @@ public final class MoriConfig {
             }
             o.put("f5Modules", f5);
             o.put("perfSwitch", perfSwitch);
+            o.put("f6Enabled", f6Enabled);
+            o.put("f6SubtitleScale", f6SubtitleScale);
+            o.put("f6SubtitleBgTransparent", f6SubtitleBgTransparent);
             o.put("lang", lang);
             o.put("hideLauncherIcon", hideLauncherIcon);
             o.put("debugLog", debugLog);
@@ -508,6 +546,7 @@ public final class MoriConfig {
             c.f2Transparent = o.optBoolean("f2Transparent", false);
                 c.f2Blur = o.optInt("f2Blur", 0);
             c.f2PlayBlur = o.optInt("f2PlayBlur", 0);
+            c.f2ChromeBlur = o.optInt("f2ChromeBlur", 20);
             c.f2Accent = o.optBoolean("f2Accent", false);
             c.f2AccentStyle = o.optString("f2AccentStyle", "TonalSpot");
             c.f2PageAlpha = o.optInt("f2PageAlpha", 55);
@@ -535,6 +574,9 @@ public final class MoriConfig {
                 }
             }
             c.perfSwitch = o.optBoolean("perfSwitch", false);
+            c.f6Enabled = o.optBoolean("f6Enabled", false);
+            c.f6SubtitleScale = (float) o.optDouble("f6SubtitleScale", 1.0);
+            c.f6SubtitleBgTransparent = o.optBoolean("f6SubtitleBgTransparent", false);
             c.lang = o.optString("lang", "zh-CN");
             c.hideLauncherIcon = o.optBoolean("hideLauncherIcon", false);
             c.debugLog = o.optBoolean("debugLog", false);
@@ -593,11 +635,14 @@ public final class MoriConfig {
                 + " F2=" + f2Enabled + "(bg=" + (f2HomeBg.isEmpty() ? "none" : "set")
                  + ",mask=" + f2MaskAlpha + ",clear=" + f2Transparent
                 + ",blur=" + f2Blur + ",playBlur=" + f2PlayBlur
+                + ",chromeBlur=" + f2ChromeBlur
                 + ",accent=" + f2Accent + "/" + f2AccentStyle
                 + ",pageA=" + f2PageAlpha + ")"
                 + " F4=" + f4Enabled + "(fam=" + (f4FontFamily.isEmpty() ? "-" : f4FontFamily)
                 + ",file=" + (f4FontFile.isEmpty() ? "none" : "set") + ")"
                 + " F5=" + f5Enabled + "(mods=" + f5Modules.size() + ")"
+                + " F6=" + (f6Enabled ? "on" : "off")
+                + "/" + f6SubtitleScale + (f6SubtitleBgTransparent ? "/bgClear" : "")
                 + " lang=" + lang + " hideIcon=" + hideLauncherIcon
                 + " perf=" + perfSwitch
                 + " media=" + mediaPool.size() + " names=" + namePool.size();

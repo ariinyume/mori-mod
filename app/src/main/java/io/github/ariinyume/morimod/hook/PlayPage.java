@@ -69,7 +69,16 @@ final class PlayPage {
     static void armPageRepaint(final View anyScreenView, final String st) {
         try {
             BgPeel.sPageSwitchAt = System.currentTimeMillis();
-            beginLightNav(320);
+            beginLightNav(520);
+            // ★ v0.2.9：切页时若 review soft-arm 挂在主窗上，立刻清掉，防深阴影污染
+            try {
+                android.view.View soft = BgPeel.sReviewUiRoot == null
+                        ? null : BgPeel.sReviewUiRoot.get();
+                if (soft == null || !BgPeel.isReviewDialogCandidate(soft)) {
+                    BgPeel.clearReviewBgMark();
+                }
+            } catch (Throwable ignored) {
+            }
             BgPeel.sSnapFrom = BgPeel.sPageSwitchAt;
             // ★ 空窗遮罩已按用户要求整条回退（r106 用户第 2 条：
             //   「现在变成了所有页面切换都有了右滑的效果，而且还会卡顿一下，比之前更差」）。

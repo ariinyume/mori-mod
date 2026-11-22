@@ -42,6 +42,14 @@ internal object S {
     val ITEM_COVER_BLOCK_SUM get() = s.ITEM_COVER_BLOCK_SUM
     val ITEM_PERF get() = s.ITEM_PERF
     val ITEM_PERF_SUM get() = s.ITEM_PERF_SUM
+    val ITEM_SUBTITLE get() = s.ITEM_SUBTITLE
+    val F6_TITLE get() = s.F6_TITLE
+    val F6_ENABLE get() = s.F6_ENABLE
+    val F6_ENABLE_SUM get() = s.F6_ENABLE_SUM
+    val ITEM_SUBTITLE_SIZE get() = s.ITEM_SUBTITLE_SIZE
+    val ITEM_SUBTITLE_SIZE_SUM get() = s.ITEM_SUBTITLE_SIZE_SUM
+    val ITEM_SUBTITLE_BG_CLEAR get() = s.ITEM_SUBTITLE_BG_CLEAR
+    val ITEM_SUBTITLE_BG_CLEAR_SUM get() = s.ITEM_SUBTITLE_BG_CLEAR_SUM
     val ITEM_HIDE_ICON get() = s.ITEM_HIDE_ICON
     val ITEM_DEBUG_LOG get() = s.ITEM_DEBUG_LOG
     val ITEM_DEBUG_LOG_SUM get() = s.ITEM_DEBUG_LOG_SUM
@@ -55,6 +63,7 @@ internal object S {
     val F2_CARD get() = s.F2_CARD
     val F2_BLUR get() = s.F2_BLUR
     val F2_PLAY_BLUR get() = s.F2_PLAY_BLUR
+    val F2_CHROME_BLUR get() = s.F2_CHROME_BLUR
     val F2_ACCENT get() = s.F2_ACCENT
     val F2_ACCENT_NOTE get() = s.F2_ACCENT_NOTE
     val F2_ACCENT_STYLE get() = s.F2_ACCENT_STYLE

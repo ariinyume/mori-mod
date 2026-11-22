@@ -28,6 +28,11 @@ public final class FeatureF4 {
      * 图标字体黑名单 —— 永不替换。命中即返回宿主原 Typeface，不做任何提示（BR-4.2）。
      * 含 PRD 明列的 MaterialSymbols / MaterialCommunityIcons / FontAwesome(全家族) /
      * expomodules.font，并补齐 RN 常用矢量图标族作为安全阀。
+     *
+     * <p>★ 2.24.0 备注：宿主正文 NotoSansJP 已迁到 {@code res/font}，不再走
+     * {@code AssetManager}；图标仍是 {@code react-native-svg} 矢量，不进 Typeface。
+     * {@code expomodules.font} / {@code ExpoFontLoader} 两条在 2.24 上可能已无实例，
+     * 保留作安全阀；主通路 {@code Paint#setTypeface} 不受字体打包方式影响。
      */
     private static final String[] ICON_BLACKLIST = {
             "MaterialSymbols", "MaterialCommunityIcons", "MaterialIcons",
@@ -349,6 +354,14 @@ public final class FeatureF4 {
         // ⚠️ 这里是 Paint#setTypeface 的热路径，**不能**每次拼字符串做指纹
         //    （每帧几十上百次调用，拼接就是每帧上百次分配）。
         String file0 = cfg.f4FontFile == null ? "" : cfg.f4FontFile;
+        // ★ v0.2.9：旧内置思源/得意黑路径迁到圆构/普力士
+        if (file0.contains("source_han_sans_sc")) {
+            file0 = ModuleAssets.ASSET_PREFIX + "fonts/geource_sans_chs.ttf";
+            cfg.f4FontFile = file0;
+        } else if (file0.contains("smiley_sans")) {
+            file0 = ModuleAssets.ASSET_PREFIX + "fonts/plix_regular.otf";
+            cfg.f4FontFile = file0;
+        }
         String fam0 = cfg.f4FontFamily == null ? "" : cfg.f4FontFamily;
         if (sBaseReady && file0.equals(sBaseFile) && fam0.equals(sBaseFam)) return sBase;
 

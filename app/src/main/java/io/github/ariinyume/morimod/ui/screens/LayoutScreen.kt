@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -41,8 +43,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import io.github.ariinyume.morimod.ui.MoriViewModel
 import io.github.ariinyume.morimod.ui.S
 import io.github.ariinyume.morimod.ui.components.BtnSize
@@ -53,12 +57,12 @@ import io.github.ariinyume.morimod.ui.components.MoriCard
 import io.github.ariinyume.morimod.ui.components.MoriSwitch
 import io.github.ariinyume.morimod.ui.components.MoriTopBar
 import io.github.ariinyume.morimod.ui.components.Space
+import kotlin.math.roundToInt
 
 /**
  * F5 · 宿主主页区块显隐与排序（路线 2）。
  *
- * 版式对齐背景自定义页：大标题上下 30dp；区块单行（拖动手柄 + 名称 | 上下移 + 开关）。
- * 点选条目高亮抬起，上下移动时带 Lazy 项位移动画。
+ * 长按拖动：跟手位移 + 其它行视觉避让；松手才落盘换位（避免中途 persist 乱跳）。
  */
 @Composable
 internal fun LayoutScreen(
@@ -76,6 +80,18 @@ internal fun LayoutScreen(
     val titleGap = 30.dp
     val cardGap = 20.dp
     var selectedId by remember { mutableStateOf<String?>(null) }
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val rowStepPx = with(density) { (56.dp + cardGap).toPx() }
+
+    val dragFrom = modules.indexOfFirst { it.id == draggingId }
+    val dragTarget = if (dragFrom >= 0) {
+        (dragFrom + (dragOffsetY / rowStepPx.coerceAtLeast(1f)).roundToInt())
+            .coerceIn(0, modules.lastIndex)
+    } else {
+        -1
+    }
 
     LazyColumn(
         state = listState,
@@ -137,16 +153,35 @@ internal fun LayoutScreen(
 
         itemsIndexed(modules, key = { _, e -> e.id }) { index, entry ->
             val selected = selectedId == entry.id
+            val dragging = draggingId == entry.id
+            // 拖动中：被拖行跟手；中间行让位；松手再 reorder
+            val settleY = when {
+                dragging -> dragOffsetY
+                dragFrom >= 0 && dragTarget > dragFrom
+                    && index in (dragFrom + 1)..dragTarget -> -rowStepPx
+                dragFrom >= 0 && dragTarget < dragFrom
+                    && index in dragTarget until dragFrom -> rowStepPx
+                else -> 0f
+            }
             ModuleRow(
-                modifier = Modifier.animateItem(
-                    fadeInSpec = null,
-                    fadeOutSpec = null,
-                    placementSpec = spring(stiffness = 380f, dampingRatio = 0.82f),
-                ),
+                modifier = Modifier
+                    .zIndex(if (dragging) 2f else if (selected) 1f else 0f)
+                    .then(
+                        if (draggingId == null) {
+                            Modifier.animateItem(
+                                fadeInSpec = null,
+                                fadeOutSpec = null,
+                                placementSpec = spring(stiffness = 380f, dampingRatio = 0.82f),
+                            )
+                        } else {
+                            Modifier
+                        },
+                    ),
                 title = f5ModuleTitle(entry.id),
                 visible = entry.visible,
                 enabled = cfg.f5Enabled,
-                selected = selected,
+                selected = selected || dragging,
+                dragOffsetY = settleY,
                 canUp = index > 0,
                 canDown = index < modules.size - 1,
                 onSelect = { selectedId = entry.id },
@@ -159,11 +194,25 @@ internal fun LayoutScreen(
                     selectedId = entry.id
                     vm.moveF5(entry.id, +1)
                 },
-                onMoveByDrag = { from, to ->
+                onDragStart = {
                     selectedId = entry.id
-                    if (from != to) vm.reorderF5(from, to)
+                    draggingId = entry.id
+                    dragOffsetY = 0f
                 },
-                index = index,
+                onDrag = { dy -> dragOffsetY += dy },
+                onDragEnd = {
+                    val from = modules.indexOfFirst { it.id == entry.id }
+                    val to = if (from >= 0) {
+                        (from + (dragOffsetY / rowStepPx.coerceAtLeast(1f)).roundToInt())
+                            .coerceIn(0, modules.lastIndex)
+                    } else {
+                        from
+                    }
+                    if (from >= 0 && to != from) vm.reorderF5(from, to)
+                    draggingId = null
+                    dragOffsetY = 0f
+                },
+                rowKey = entry.id,
             )
         }
 
@@ -187,27 +236,25 @@ private fun ModuleRow(
     visible: Boolean,
     enabled: Boolean,
     selected: Boolean,
+    dragOffsetY: Float,
     canUp: Boolean,
     canDown: Boolean,
-    index: Int,
     onSelect: () -> Unit,
     onVisible: (Boolean) -> Unit,
     onUp: () -> Unit,
     onDown: () -> Unit,
-    onMoveByDrag: (from: Int, to: Int) -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (dy: Float) -> Unit,
+    onDragEnd: () -> Unit,
+    rowKey: String,
     modifier: Modifier = Modifier,
 ) {
-    var dragAccum by remember { mutableStateOf(0f) }
     val rowH = 56.dp
+    val shape = MaterialTheme.shapes.large
     val scale by animateFloatAsState(
         targetValue = if (selected) 1.03f else 1f,
         animationSpec = spring(stiffness = 420f, dampingRatio = 0.78f),
         label = "f5-row-scale",
-    )
-    val lift by animateFloatAsState(
-        targetValue = if (selected) 8f else 0f,
-        animationSpec = spring(stiffness = 420f, dampingRatio = 0.78f),
-        label = "f5-row-lift",
     )
     val bg = if (selected) {
         MaterialTheme.colorScheme.secondaryContainer
@@ -220,105 +267,106 @@ private fun ModuleRow(
         MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0f)
     }
 
-    Row(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .height(rowH)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-                translationY = -lift * 0.35f
-                shadowElevation = lift
+                translationY = dragOffsetY
             }
-            .shadow(
-                elevation = if (selected) 6.dp else 0.dp,
-                shape = MaterialTheme.shapes.large,
-                clip = false,
+            .then(
+                if (selected) {
+                    Modifier.shadow(
+                        elevation = 8.dp,
+                        shape = shape,
+                        clip = false,
+                        ambientColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.28f),
+                        spotColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.36f),
+                    )
+                } else {
+                    Modifier
+                },
             )
-            .clip(MaterialTheme.shapes.large)
-            .background(bg)
-            .border(1.5.dp, borderColor, MaterialTheme.shapes.large)
+            .clip(shape)
+            .background(bg, shape)
+            .border(1.5.dp, borderColor, shape)
             .clickable(
                 enabled = enabled,
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onSelect,
             )
-            .pointerInput(enabled, index) {
+            .pointerInput(enabled, rowKey) {
                 if (!enabled) return@pointerInput
                 detectDragGesturesAfterLongPress(
-                    onDragStart = {
-                        onSelect()
-                        dragAccum = 0f
-                    },
-                    onDragEnd = {
-                        val step = (rowH.toPx()).coerceAtLeast(1f)
-                        val steps = (dragAccum / step).toInt()
-                        if (steps != 0) {
-                            onMoveByDrag(index, (index + steps).coerceAtLeast(0))
-                        }
-                        dragAccum = 0f
-                    },
-                    onDragCancel = { dragAccum = 0f },
+                    onDragStart = { onDragStart() },
+                    onDragEnd = { onDragEnd() },
+                    onDragCancel = { onDragEnd() },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        dragAccum += dragAmount.y
+                        onDrag(dragAmount.y)
                     },
                 )
             }
             .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = Icons.Rounded.DragHandle,
-            contentDescription = null,
-            tint = if (selected) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.size(22.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (selected) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(
-            onClick = onUp,
-            enabled = enabled && canUp,
-            modifier = Modifier.size(40.dp),
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                Icons.Rounded.ArrowUpward,
-                contentDescription = S.F5_MOVE_UP,
-                modifier = Modifier.size(20.dp),
+                imageVector = Icons.Rounded.DragHandle,
+                contentDescription = null,
+                tint = if (selected) {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onUp,
+                enabled = enabled && canUp,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Rounded.ArrowUpward,
+                    contentDescription = S.F5_MOVE_UP,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            IconButton(
+                onClick = onDown,
+                enabled = enabled && canDown,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Rounded.ArrowDownward,
+                    contentDescription = S.F5_MOVE_DOWN,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            MoriSwitch(
+                checked = visible,
+                onCheckedChange = onVisible,
+                enabled = enabled,
             )
         }
-        IconButton(
-            onClick = onDown,
-            enabled = enabled && canDown,
-            modifier = Modifier.size(40.dp),
-        ) {
-            Icon(
-                Icons.Rounded.ArrowDownward,
-                contentDescription = S.F5_MOVE_DOWN,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        MoriSwitch(
-            checked = visible,
-            onCheckedChange = onVisible,
-            enabled = enabled,
-        )
     }
 }
 
